@@ -13,6 +13,7 @@ function createAgentTab(): WorkspaceTabDescriptor {
 
 describe("buildWorkspaceTabMenuEntries", () => {
   it("uses desktop tab ordering labels for desktop menus", () => {
+    const onCopyTabPath = vi.fn();
     const onCopyResumeCommand = vi.fn();
     const onCopyAgentId = vi.fn();
     const onReloadAgent = vi.fn();
@@ -28,6 +29,7 @@ describe("buildWorkspaceTabMenuEntries", () => {
       index: 1,
       tabCount: 3,
       menuTestIDBase: "workspace-tab-context-agent_123",
+      onCopyTabPath,
       onCopyResumeCommand,
       onCopyAgentId,
       onReloadAgent,
@@ -39,6 +41,7 @@ describe("buildWorkspaceTabMenuEntries", () => {
     });
 
     expect(entries.filter((entry) => entry.kind === "item").map((entry) => entry.label)).toEqual([
+      "Copy path",
       "Copy resume command",
       "Copy agent id",
       "Rename",
@@ -57,6 +60,7 @@ describe("buildWorkspaceTabMenuEntries", () => {
       index: 1,
       tabCount: 3,
       menuTestIDBase: "workspace-tab-menu-agent_123",
+      onCopyTabPath: vi.fn(),
       onCopyResumeCommand: vi.fn(),
       onCopyAgentId: vi.fn(),
       onReloadAgent: vi.fn(),
@@ -68,6 +72,7 @@ describe("buildWorkspaceTabMenuEntries", () => {
     });
 
     expect(entries.filter((entry) => entry.kind === "item").map((entry) => entry.label)).toEqual([
+      "Copy path",
       "Copy resume command",
       "Copy agent id",
       "Rename",
@@ -91,6 +96,7 @@ describe("buildWorkspaceTabMenuEntries", () => {
       index: 0,
       tabCount: 1,
       menuTestIDBase: "workspace-tab-menu-draft_123",
+      onCopyTabPath: vi.fn(),
       onCopyResumeCommand: vi.fn(),
       onCopyAgentId: vi.fn(),
       onReloadAgent: vi.fn(),
@@ -118,6 +124,7 @@ describe("buildWorkspaceTabMenuEntries", () => {
       index: 0,
       tabCount: 1,
       menuTestIDBase: "workspace-tab-context-agent_123",
+      onCopyTabPath: vi.fn(),
       onCopyResumeCommand: vi.fn(),
       onCopyAgentId: vi.fn(),
       onReloadAgent: vi.fn(),
@@ -146,6 +153,7 @@ describe("buildWorkspaceTabMenuEntries", () => {
       index: 0,
       tabCount: 1,
       menuTestIDBase: "workspace-tab-context-agent_123",
+      onCopyTabPath: vi.fn(),
       onCopyResumeCommand: vi.fn(),
       onCopyAgentId: vi.fn(),
       onReloadAgent: vi.fn(),
@@ -179,6 +187,7 @@ describe("buildWorkspaceTabMenuEntries", () => {
       index: 0,
       tabCount: 1,
       menuTestIDBase: "workspace-tab-context-terminal_abc",
+      onCopyTabPath: vi.fn(),
       onCopyResumeCommand: vi.fn(),
       onCopyAgentId: vi.fn(),
       onReloadAgent: vi.fn(),
@@ -190,7 +199,8 @@ describe("buildWorkspaceTabMenuEntries", () => {
     });
 
     const labels = entries.filter((entry) => entry.kind === "item").map((entry) => entry.label);
-    expect(labels[0]).toBe("Rename");
+    expect(labels[0]).toBe("Copy path");
+    expect(labels[1]).toBe("Rename");
     expect(labels).not.toContain("Copy resume command");
     expect(labels).not.toContain("Copy agent id");
     expect(labels).not.toContain("Reload agent");
@@ -216,6 +226,7 @@ describe("buildWorkspaceTabMenuEntries", () => {
       index: 0,
       tabCount: 1,
       menuTestIDBase,
+      onCopyTabPath: vi.fn(),
       onCopyResumeCommand: vi.fn(),
       onCopyAgentId: vi.fn(),
       onReloadAgent: vi.fn(),
@@ -259,5 +270,158 @@ describe("buildWorkspaceTabMenuEntries", () => {
       .find((entry) => entry.kind === "separator");
     expect(agentSeparator?.key).toBe("rename-separator");
     expect(terminalSeparator?.key).toBe("rename-separator");
+  });
+
+  it("includes copy path as the first entry for file tabs with a separator", () => {
+    const onCopyTabPath = vi.fn();
+    const fileTab: WorkspaceTabDescriptor = {
+      key: "file_src",
+      tabId: "file_src",
+      kind: "file",
+      target: { kind: "file", path: "src/index.ts" },
+    };
+    const entries = buildWorkspaceTabMenuEntries({
+      surface: "desktop",
+      tab: fileTab,
+      index: 0,
+      tabCount: 1,
+      menuTestIDBase: "workspace-tab-context-file_src",
+      onCopyTabPath,
+      onCopyResumeCommand: vi.fn(),
+      onCopyAgentId: vi.fn(),
+      onReloadAgent: vi.fn(),
+      onRenameTab: vi.fn(),
+      onCloseTab: vi.fn(),
+      onCloseTabsBefore: vi.fn(),
+      onCloseTabsAfter: vi.fn(),
+      onCloseOtherTabs: vi.fn(),
+    });
+
+    const labels = entries.filter((entry) => entry.kind === "item").map((entry) => entry.label);
+    expect(labels[0]).toBe("Copy path");
+    expect(labels).not.toContain("Rename");
+    expect(
+      entries.some((entry) => entry.kind === "separator" && entry.key === "copy-path-separator"),
+    ).toBe(true);
+
+    const copyPathEntry = entries.find(
+      (entry) => entry.kind === "item" && entry.key === "copy-path",
+    );
+    if (!copyPathEntry || copyPathEntry.kind !== "item") {
+      throw new Error("Copy path entry missing");
+    }
+    copyPathEntry.onSelect();
+    expect(onCopyTabPath).toHaveBeenCalledWith(fileTab);
+  });
+
+  it("includes copy path for draft tabs with a configured cwd", () => {
+    const entries = buildWorkspaceTabMenuEntries({
+      surface: "desktop",
+      tab: {
+        key: "draft_cwd",
+        tabId: "draft_cwd",
+        kind: "draft",
+        target: {
+          kind: "draft",
+          draftId: "draft_cwd",
+          setup: {
+            provider: "claude",
+            cwd: "/home/user/project",
+            modeId: null,
+            model: null,
+            thinkingOptionId: null,
+            featureValues: {},
+          },
+        },
+      },
+      index: 0,
+      tabCount: 1,
+      menuTestIDBase: "workspace-tab-context-draft_cwd",
+      onCopyTabPath: vi.fn(),
+      onCopyResumeCommand: vi.fn(),
+      onCopyAgentId: vi.fn(),
+      onReloadAgent: vi.fn(),
+      onRenameTab: vi.fn(),
+      onCloseTab: vi.fn(),
+      onCloseTabsBefore: vi.fn(),
+      onCloseTabsAfter: vi.fn(),
+      onCloseOtherTabs: vi.fn(),
+    });
+
+    expect(entries.some((entry) => entry.kind === "item" && entry.label === "Copy path")).toBe(
+      true,
+    );
+  });
+
+  it("omits copy path for draft tabs without a configured cwd", () => {
+    const entries = buildWorkspaceTabMenuEntries({
+      surface: "desktop",
+      tab: {
+        key: "draft_nopath",
+        tabId: "draft_nopath",
+        kind: "draft",
+        target: { kind: "draft", draftId: "draft_nopath" },
+      },
+      index: 0,
+      tabCount: 1,
+      menuTestIDBase: "workspace-tab-context-draft_nopath",
+      onCopyTabPath: vi.fn(),
+      onCopyResumeCommand: vi.fn(),
+      onCopyAgentId: vi.fn(),
+      onReloadAgent: vi.fn(),
+      onRenameTab: vi.fn(),
+      onCloseTab: vi.fn(),
+      onCloseTabsBefore: vi.fn(),
+      onCloseTabsAfter: vi.fn(),
+      onCloseOtherTabs: vi.fn(),
+    });
+
+    expect(entries.some((entry) => entry.kind === "item" && entry.label === "Copy path")).toBe(
+      false,
+    );
+  });
+
+  it("omits copy path for browser and setup tabs", () => {
+    const sharedInput = {
+      surface: "desktop" as const,
+      index: 0,
+      tabCount: 1,
+      menuTestIDBase: "workspace-tab-context",
+      onCopyTabPath: vi.fn(),
+      onCopyResumeCommand: vi.fn(),
+      onCopyAgentId: vi.fn(),
+      onReloadAgent: vi.fn(),
+      onRenameTab: vi.fn(),
+      onCloseTab: vi.fn(),
+      onCloseTabsBefore: vi.fn(),
+      onCloseTabsAfter: vi.fn(),
+      onCloseOtherTabs: vi.fn(),
+    };
+
+    const browserEntries = buildWorkspaceTabMenuEntries({
+      ...sharedInput,
+      tab: {
+        key: "browser_1",
+        tabId: "browser_1",
+        kind: "browser",
+        target: { kind: "browser", browserId: "browser-1" },
+      },
+    });
+    const setupEntries = buildWorkspaceTabMenuEntries({
+      ...sharedInput,
+      tab: {
+        key: "setup_1",
+        tabId: "setup_1",
+        kind: "setup",
+        target: { kind: "setup", workspaceId: "workspace-1" },
+      },
+    });
+
+    expect(
+      browserEntries.some((entry) => entry.kind === "item" && entry.label === "Copy path"),
+    ).toBe(false);
+    expect(setupEntries.some((entry) => entry.kind === "item" && entry.label === "Copy path")).toBe(
+      false,
+    );
   });
 });

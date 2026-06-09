@@ -83,6 +83,7 @@ interface SplitContainerProps {
   closingTabIds: Set<string>;
   onNavigateTab: (tabId: string) => void;
   onCloseTab: (tabId: string) => Promise<void> | void;
+  onCopyTabPath: (tab: WorkspaceTabDescriptor) => Promise<void> | void;
   onCopyResumeCommand: (agentId: string) => Promise<void> | void;
   onCopyAgentId: (agentId: string) => Promise<void> | void;
   onReloadAgent: (agentId: string) => Promise<void> | void;
@@ -361,6 +362,7 @@ export function SplitContainer({
   closingTabIds,
   onNavigateTab,
   onCloseTab,
+  onCopyTabPath,
   onCopyResumeCommand,
   onCopyAgentId,
   onReloadAgent,
@@ -577,6 +579,7 @@ export function SplitContainer({
           closingTabIds={closingTabIds}
           onNavigateTab={onNavigateTab}
           onCloseTab={onCloseTab}
+          onCopyTabPath={onCopyTabPath}
           onCopyResumeCommand={onCopyResumeCommand}
           onCopyAgentId={onCopyAgentId}
           onReloadAgent={onReloadAgent}
@@ -717,6 +720,7 @@ function SplitNodeView({
   closingTabIds,
   onNavigateTab,
   onCloseTab,
+  onCopyTabPath,
   onCopyResumeCommand,
   onCopyAgentId,
   onReloadAgent,
@@ -769,6 +773,7 @@ function SplitNodeView({
         closingTabIds={closingTabIds}
         onNavigateTab={onNavigateTab}
         onCloseTab={onCloseTab}
+        onCopyTabPath={onCopyTabPath}
         onCopyResumeCommand={onCopyResumeCommand}
         onCopyAgentId={onCopyAgentId}
         onReloadAgent={onReloadAgent}
@@ -814,6 +819,7 @@ function SplitNodeView({
               closingTabIds={closingTabIds}
               onNavigateTab={onNavigateTab}
               onCloseTab={onCloseTab}
+              onCopyTabPath={onCopyTabPath}
               onCopyResumeCommand={onCopyResumeCommand}
               onCopyAgentId={onCopyAgentId}
               onReloadAgent={onReloadAgent}
@@ -865,6 +871,7 @@ function SplitPaneView({
   closingTabIds,
   onNavigateTab,
   onCloseTab,
+  onCopyTabPath,
   onCopyResumeCommand,
   onCopyAgentId,
   onReloadAgent,
@@ -1006,6 +1013,7 @@ function SplitPaneView({
             setHoveredCloseTabKey={setHoveredCloseTabKey}
             onNavigateTab={onNavigateTab}
             onCloseTab={onCloseTab}
+            onCopyTabPath={onCopyTabPath}
             onCopyResumeCommand={onCopyResumeCommand}
             onCopyAgentId={onCopyAgentId}
             onReloadAgent={onReloadAgent}

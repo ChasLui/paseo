@@ -175,6 +175,7 @@ import { useWorkspaceTerminals } from "@/screens/workspace/terminals/use-workspa
 import {
   createWorkspaceFileTabTarget,
   normalizeWorkspaceFileLocation,
+  resolveWorkspaceFilePaths,
   type WorkspaceFileLocation,
   type WorkspaceFileOpenRequest,
 } from "@/workspace/file-open";
@@ -342,6 +343,7 @@ interface MobileWorkspaceTabSwitcherProps {
   normalizedServerId: string;
   normalizedWorkspaceId: string;
   onSelectSwitcherTab: (key: string) => void;
+  onCopyTabPath: (tab: WorkspaceTabDescriptor) => Promise<void> | void;
   onCopyResumeCommand: (agentId: string) => Promise<void> | void;
   onCopyAgentId: (agentId: string) => Promise<void> | void;
   onReloadAgent: (agentId: string) => Promise<void> | void;
@@ -521,6 +523,7 @@ function MobileWorkspaceTabOption({
   selected,
   active,
   onPress,
+  onCopyTabPath,
   onCopyResumeCommand,
   onCopyAgentId,
   onReloadAgent,
@@ -538,6 +541,7 @@ function MobileWorkspaceTabOption({
   selected: boolean;
   active: boolean;
   onPress: () => void;
+  onCopyTabPath: (tab: WorkspaceTabDescriptor) => Promise<void> | void;
   onCopyResumeCommand: (agentId: string) => Promise<void> | void;
   onCopyAgentId: (agentId: string) => Promise<void> | void;
   onReloadAgent: (agentId: string) => Promise<void> | void;
@@ -554,6 +558,7 @@ function MobileWorkspaceTabOption({
     index: tabIndex,
     tabCount,
     menuTestIDBase,
+    onCopyTabPath,
     onCopyResumeCommand,
     onCopyAgentId,
     onReloadAgent,
@@ -609,6 +614,7 @@ const MobileWorkspaceTabSwitcher = memo(function MobileWorkspaceTabSwitcher({
   normalizedServerId,
   normalizedWorkspaceId,
   onSelectSwitcherTab,
+  onCopyTabPath,
   onCopyResumeCommand,
   onCopyAgentId,
   onReloadAgent,
@@ -663,6 +669,7 @@ const MobileWorkspaceTabSwitcher = memo(function MobileWorkspaceTabSwitcher({
           selected={selected}
           active={active}
           onPress={onPress}
+          onCopyTabPath={onCopyTabPath}
           onCopyResumeCommand={onCopyResumeCommand}
           onCopyAgentId={onCopyAgentId}
           onReloadAgent={onReloadAgent}
@@ -680,6 +687,7 @@ const MobileWorkspaceTabSwitcher = memo(function MobileWorkspaceTabSwitcher({
       tabs.length,
       normalizedServerId,
       normalizedWorkspaceId,
+      onCopyTabPath,
       onCopyResumeCommand,
       onCopyAgentId,
       onReloadAgent,
@@ -2489,6 +2497,40 @@ function WorkspaceScreenContent({
     [toast],
   );
 
+  const handleCopyTabPath = useCallback(
+    async (tab: WorkspaceTabDescriptor) => {
+      const { target } = tab;
+      let path: string | null = null;
+      if (target.kind === "agent") {
+        path =
+          useSessionStore.getState().sessions[normalizedServerId]?.agents?.get(target.agentId)
+            ?.cwd ?? null;
+      } else if (target.kind === "terminal") {
+        path = workspaceDirectory;
+      } else if (target.kind === "file") {
+        path = workspaceDirectory
+          ? (resolveWorkspaceFilePaths({
+              path: target.path,
+              workspaceRoot: workspaceDirectory,
+            })?.absolutePath ?? null)
+          : null;
+      } else if (target.kind === "draft") {
+        path = target.setup?.cwd ?? null;
+      }
+      if (!path) {
+        toast.error("Path not available");
+        return;
+      }
+      try {
+        await Clipboard.setStringAsync(path);
+        toast.copied("Path");
+      } catch {
+        toast.error("Copy failed");
+      }
+    },
+    [normalizedServerId, toast, workspaceDirectory],
+  );
+
   const handleCopyResumeCommand = useCallback(
     async (agentId: string) => {
       if (!agentId) return;
@@ -3293,6 +3335,7 @@ function WorkspaceScreenContent({
         closingTabIds={closingTabIds}
         onNavigateTab={navigateToTabId}
         onCloseTab={handleCloseTabById}
+        onCopyTabPath={handleCopyTabPath}
         onCopyResumeCommand={handleCopyResumeCommand}
         onCopyAgentId={handleCopyAgentId}
         onReloadAgent={handleReloadAgent}
@@ -3327,6 +3370,7 @@ function WorkspaceScreenContent({
     closingTabIds,
     navigateToTabId,
     handleCloseTabById,
+    handleCopyTabPath,
     handleCopyResumeCommand,
     handleCopyAgentId,
     handleReloadAgent,
@@ -3406,6 +3450,7 @@ function WorkspaceScreenContent({
           normalizedServerId={normalizedServerId}
           normalizedWorkspaceId={normalizedWorkspaceId}
           onSelectSwitcherTab={handleSelectSwitcherTab}
+          onCopyTabPath={handleCopyTabPath}
           onCopyResumeCommand={handleCopyResumeCommand}
           onCopyAgentId={handleCopyAgentId}
           onReloadAgent={handleReloadAgent}
@@ -3427,6 +3472,7 @@ function WorkspaceScreenContent({
           setHoveredCloseTabKey={setHoveredCloseTabKey}
           onNavigateTab={navigateToTabId}
           onCloseTab={handleCloseTabById}
+          onCopyTabPath={handleCopyTabPath}
           onCopyResumeCommand={handleCopyResumeCommand}
           onCopyAgentId={handleCopyAgentId}
           onReloadAgent={handleReloadAgent}
