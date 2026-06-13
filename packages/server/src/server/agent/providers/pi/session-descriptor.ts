@@ -3,15 +3,12 @@ import { homedir } from "node:os";
 import path from "node:path";
 
 import type {
-  AgentPersistenceHandle,
-  AgentTimelineItem,
-  ListPersistedAgentsOptions,
-  PersistedAgentDescriptor,
+  ImportableProviderSession,
+  ListImportableSessionsOptions,
 } from "../../agent-sdk-types.js";
 import type { ProviderRuntimeSettings } from "../../provider-launch-config.js";
 import { createRealpathAwarePathMatcher } from "../../../../utils/path.js";
 
-const PI_PROVIDER = "pi";
 const PI_CONFIG_DIR_NAME = ".pi";
 const PI_AGENT_DIR_ENV = "PI_CODING_AGENT_DIR";
 const PI_SESSION_DIR_ENV = "PI_CODING_AGENT_SESSION_DIR";
@@ -19,8 +16,7 @@ const HEAD_BYTES = 64 * 1024;
 const TAIL_BYTES = 256 * 1024;
 const FULL_SCAN_LINE_LIMIT = 2_000;
 
-interface PiSessionDescriptorOptions extends ListPersistedAgentsOptions {
-  provider?: string;
+interface PiSessionDescriptorOptions extends ListImportableSessionsOptions {
   sessionDir?: string;
   runtimeSettings?: ProviderRuntimeSettings;
   env?: NodeJS.ProcessEnv;
@@ -37,28 +33,57 @@ interface PiSessionTail {
   title: string | null;
   lastActivityAt: Date | null;
   lastUserMessage: string | null;
+  model: string | null;
+  thinkingOptionId: string | null;
 }
 
-export async function listPiPersistedAgents(
+interface PiSessionHead {
+  title: string | null;
+  firstUserMessage: string | null;
+  model: string | null;
+  thinkingOptionId: string | null;
+}
+
+interface PiSessionDescriptor {
+  cwd: string;
+  title: string | null;
+  firstUserMessage: string | null;
+  lastUserMessage: string | null;
+  lastActivityAt: Date;
+  model: string | null;
+  thinkingOptionId: string | null;
+}
+
+export interface PiImportSessionConfig {
+  model?: string;
+  thinkingOptionId?: string;
+}
+
+export async function listPiImportableSessions(
   options: PiSessionDescriptorOptions = {},
-): Promise<PersistedAgentDescriptor[]> {
-  const provider = options.provider ?? PI_PROVIDER;
+): Promise<ImportableProviderSession[]> {
   const sessionsDir = await resolvePiSessionsDir(options);
   const files = await walkJsonlFiles(sessionsDir);
   const matchesCwd = options.cwd ? createRealpathAwarePathMatcher(options.cwd) : null;
   const limit = options.limit ?? 20;
-  const descriptors: PersistedAgentDescriptor[] = [];
+  const sessions: ImportableProviderSession[] = [];
 
   for (const file of files) {
-    const descriptor = await readPiSessionDescriptor(file, provider);
-    if (!descriptor) continue;
-    if (matchesCwd && !matchesCwd(descriptor.cwd)) continue;
-    descriptors.push(descriptor);
+    const session = await readPiImportableSession(file);
+    if (!session) continue;
+    if (matchesCwd && !matchesCwd(session.cwd)) continue;
+    sessions.push(session);
   }
 
-  return descriptors
+  return sessions
     .sort((left, right) => right.lastActivityAt.getTime() - left.lastActivityAt.getTime())
     .slice(0, limit);
+}
+
+export async function readPiImportSessionConfig(filePath: string): Promise<PiImportSessionConfig> {
+  const descriptor = await readPiSessionDescriptor(filePath);
+  if (!descriptor) return {};
+  return toPiImportSessionConfig(descriptor);
 }
 
 async function resolvePiSessionsDir(options: PiSessionDescriptorOptions): Promise<string> {
@@ -157,10 +182,25 @@ async function walkJsonlFiles(root: string): Promise<string[]> {
   return files.flat();
 }
 
-async function readPiSessionDescriptor(
+async function readPiImportableSession(
   filePath: string,
-  provider: string,
-): Promise<PersistedAgentDescriptor | null> {
+): Promise<ImportableProviderSession | null> {
+  const descriptor = await readPiSessionDescriptor(filePath);
+  if (!descriptor) return null;
+
+  return {
+    providerHandleId: filePath,
+    cwd: descriptor.cwd,
+    title: descriptor.title,
+    firstPromptPreview: normalizePromptPreview(descriptor.firstUserMessage),
+    lastPromptPreview: normalizePromptPreview(
+      descriptor.lastUserMessage ?? descriptor.firstUserMessage,
+    ),
+    lastActivityAt: descriptor.lastActivityAt,
+  };
+}
+
+async function readPiSessionDescriptor(filePath: string): Promise<PiSessionDescriptor | null> {
   const firstLine = await readFirstLine(filePath);
   if (!firstLine) return null;
   const header = parseSessionHeader(firstLine);
@@ -170,31 +210,26 @@ async function readPiSessionDescriptor(
   const tailInfo = parseSessionTail(tail);
   const headInfo = await scanSessionHead(filePath);
   const title = tailInfo.title ?? headInfo.title ?? headInfo.firstUserMessage;
+  const model = tailInfo.model ?? headInfo.model;
+  const thinkingOptionId = tailInfo.thinkingOptionId ?? headInfo.thinkingOptionId;
   const lastActivityAt =
     tailInfo.lastActivityAt ?? (await readFileMtime(filePath)) ?? header.createdAt ?? new Date(0);
-  const timeline = buildPreviewTimeline({
-    firstUserMessage: headInfo.firstUserMessage,
-    lastUserMessage: tailInfo.lastUserMessage,
-  });
-
-  const persistence: AgentPersistenceHandle = {
-    provider,
-    sessionId: header.sessionId,
-    nativeHandle: filePath,
-    metadata: {
-      provider,
-      cwd: header.cwd,
-    },
-  };
 
   return {
-    provider,
-    sessionId: header.sessionId,
     cwd: header.cwd,
     title,
+    firstUserMessage: headInfo.firstUserMessage,
+    lastUserMessage: tailInfo.lastUserMessage,
     lastActivityAt,
-    persistence,
-    timeline,
+    model,
+    thinkingOptionId,
+  };
+}
+
+function toPiImportSessionConfig(descriptor: PiSessionDescriptor): PiImportSessionConfig {
+  return {
+    ...(descriptor.model ? { model: descriptor.model } : {}),
+    ...(descriptor.thinkingOptionId ? { thinkingOptionId: descriptor.thinkingOptionId } : {}),
   };
 }
 
@@ -251,6 +286,8 @@ function parseSessionTail(tail: string): PiSessionTail {
   let lastActivityAt: Date | null = null;
   let fallbackTimestamp: Date | null = null;
   let lastUserMessage: string | null = null;
+  let model: string | null = null;
+  let thinkingOptionId: string | null = null;
 
   for (let index = lines.length - 1; index >= 0; index -= 1) {
     const entry = parseJsonRecord(lines[index].trim());
@@ -260,14 +297,20 @@ function parseSessionTail(tail: string): PiSessionTail {
       title = readNonEmptyString(entry.name);
     }
 
+    if (!model) {
+      model = extractModel(entry);
+    }
+
+    if (!thinkingOptionId) {
+      thinkingOptionId = extractThinkingOptionId(entry);
+    }
+
     const entryTimestamp = parseDate(entry.timestamp);
     if (!fallbackTimestamp && entryTimestamp) {
       fallbackTimestamp = entryTimestamp;
     }
 
-    if (entry.type !== "message") {
-      continue;
-    }
+    if (entry.type !== "message") continue;
 
     if (!lastActivityAt && entryTimestamp) {
       lastActivityAt = entryTimestamp;
@@ -276,28 +319,29 @@ function parseSessionTail(tail: string): PiSessionTail {
     if (!lastUserMessage && isRecord(entry.message) && entry.message.role === "user") {
       lastUserMessage = extractMessageText(entry.message.content);
     }
-
-    if (title && lastActivityAt && lastUserMessage) {
-      break;
-    }
   }
 
-  return { title, lastActivityAt: lastActivityAt ?? fallbackTimestamp, lastUserMessage };
+  return {
+    title,
+    lastActivityAt: lastActivityAt ?? fallbackTimestamp,
+    lastUserMessage,
+    model,
+    thinkingOptionId,
+  };
 }
 
-async function scanSessionHead(filePath: string): Promise<{
-  title: string | null;
-  firstUserMessage: string | null;
-}> {
+async function scanSessionHead(filePath: string): Promise<PiSessionHead> {
   let content: string;
   try {
     content = await readFile(filePath, "utf8");
   } catch {
-    return { title: null, firstUserMessage: null };
+    return { title: null, firstUserMessage: null, model: null, thinkingOptionId: null };
   }
 
   let title: string | null = null;
   let firstUserMessage: string | null = null;
+  let model: string | null = null;
+  let thinkingOptionId: string | null = null;
   let lineCount = 0;
 
   for (const rawLine of content.split(/\r?\n/u)) {
@@ -309,13 +353,16 @@ async function scanSessionHead(filePath: string): Promise<{
       title = readNonEmptyString(entry.name) ?? title;
     }
 
+    model = extractModel(entry) ?? model;
+    thinkingOptionId = extractThinkingOptionId(entry) ?? thinkingOptionId;
+
     if (!firstUserMessage && entry.type === "message" && isRecord(entry.message)) {
       if (entry.message.role === "user") {
         firstUserMessage = extractMessageText(entry.message.content);
       }
     }
 
-    if (title && firstUserMessage) {
+    if (title && firstUserMessage && model && thinkingOptionId) {
       break;
     }
     if (lineCount >= FULL_SCAN_LINE_LIMIT && firstUserMessage) {
@@ -323,21 +370,32 @@ async function scanSessionHead(filePath: string): Promise<{
     }
   }
 
-  return { title, firstUserMessage };
+  return { title, firstUserMessage, model, thinkingOptionId };
 }
 
-function buildPreviewTimeline(input: {
-  firstUserMessage: string | null;
-  lastUserMessage: string | null;
-}): AgentTimelineItem[] {
-  const items: AgentTimelineItem[] = [];
-  if (input.firstUserMessage) {
-    items.push({ type: "user_message", text: input.firstUserMessage });
+function extractModel(entry: Record<string, unknown>): string | null {
+  if (entry.type === "model_change") {
+    return buildModelId(entry.provider, entry.modelId);
   }
-  if (input.lastUserMessage && input.lastUserMessage !== input.firstUserMessage) {
-    items.push({ type: "user_message", text: input.lastUserMessage });
+
+  if (entry.type === "message" && isRecord(entry.message)) {
+    return buildModelId(entry.message.provider, entry.message.model);
   }
-  return items;
+
+  return null;
+}
+
+function extractThinkingOptionId(entry: Record<string, unknown>): string | null {
+  return entry.type === "thinking_level_change" ? readNonEmptyString(entry.thinkingLevel) : null;
+}
+
+function buildModelId(provider: unknown, modelId: unknown): string | null {
+  const providerName = readNonEmptyString(provider);
+  const modelName = readNonEmptyString(modelId);
+  if (!providerName || !modelName) {
+    return null;
+  }
+  return `${providerName}/${modelName}`;
 }
 
 function parseJsonRecord(line: string): Record<string, unknown> | null {
@@ -356,6 +414,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function readNonEmptyString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function normalizePromptPreview(text: string | null): string | null {
+  const normalized = text?.trim().replace(/\s+/g, " ") ?? "";
+  if (!normalized) return null;
+  return normalized.length > 160 ? normalized.slice(0, 160) : normalized;
 }
 
 function parseDate(value: unknown): Date | null {

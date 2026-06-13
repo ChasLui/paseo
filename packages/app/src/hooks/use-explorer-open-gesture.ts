@@ -2,12 +2,9 @@ import { useCallback, useMemo } from "react";
 import { Gesture } from "react-native-gesture-handler";
 import { Extrapolation, interpolate, runOnJS, useSharedValue } from "react-native-reanimated";
 import { useExplorerSidebarAnimation } from "@/contexts/explorer-sidebar-animation-context";
-import {
-  MOBILE_VISUAL_PANEL_AGENT,
-  MOBILE_VISUAL_PANEL_FILE_EXPLORER,
-  useSidebarAnimation,
-} from "@/contexts/sidebar-animation-context";
+import { useSidebarAnimation } from "@/contexts/sidebar-animation-context";
 import { isWeb } from "@/constants/platform";
+import { canOpenRightSidebarGesture } from "@/utils/sidebar-animation-state";
 
 interface UseExplorerOpenGestureParams {
   enabled: boolean;
@@ -23,12 +20,13 @@ export function useExplorerOpenGesture({ enabled, onOpen }: UseExplorerOpenGestu
     windowWidth,
     animateToOpen,
     animateToClose,
+    setOverlayPeek,
     isGesturing,
     gestureAnimatingRef,
     openGestureRef,
   } = useExplorerSidebarAnimation();
   const {
-    mobileVisualPanel,
+    mobilePanelState,
     gestureAnimatingRef: mobilePanelGestureAnimatingRef,
     openGestureRef: leftOpenGestureRef,
   } = useSidebarAnimation();
@@ -68,7 +66,7 @@ export function useExplorerOpenGesture({ enabled, onOpen }: UseExplorerOpenGestu
           const absDeltaX = Math.abs(deltaX);
           const absDeltaY = Math.abs(deltaY);
 
-          if (mobileVisualPanel.value !== MOBILE_VISUAL_PANEL_AGENT) {
+          if (!canOpenRightSidebarGesture(mobilePanelState.value, translateX.value, windowWidth)) {
             stateManager.fail();
             return;
           }
@@ -96,6 +94,8 @@ export function useExplorerOpenGesture({ enabled, onOpen }: UseExplorerOpenGestu
         })
         .onStart(() => {
           isGesturing.value = true;
+          // The overlay is display:none while closed; reveal it for the drag.
+          runOnJS(setOverlayPeek)(true);
         })
         .onUpdate((event) => {
           // Right sidebar: start from closed position (+windowWidth) and move towards 0.
@@ -117,25 +117,25 @@ export function useExplorerOpenGesture({ enabled, onOpen }: UseExplorerOpenGestu
           const shouldOpenByVelocity = event.velocityX < -500;
           const shouldOpen = shouldOpenByPosition || shouldOpenByVelocity;
           if (shouldOpen) {
-            mobileVisualPanel.value = MOBILE_VISUAL_PANEL_FILE_EXPLORER;
             animateToOpen();
             runOnJS(handleGestureOpen)();
           } else {
-            mobileVisualPanel.value = MOBILE_VISUAL_PANEL_AGENT;
             animateToClose();
           }
         })
         .onFinalize(() => {
           isGesturing.value = false;
+          runOnJS(setOverlayPeek)(false);
         }),
     [
       enabled,
       windowWidth,
       translateX,
       backdropOpacity,
-      mobileVisualPanel,
+      mobilePanelState,
       animateToOpen,
       animateToClose,
+      setOverlayPeek,
       isGesturing,
       openGestureRef,
       leftOpenGestureRef,

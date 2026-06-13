@@ -1,5 +1,5 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useTranslation } from "react-i18next";
 import { useHostRuntimeClient, useHostRuntimeIsConnected } from "@/runtime/host-runtime";
 import type { CheckoutPrStatusResponse } from "@getpaseo/protocol/messages";
 import { checkoutPrStatusQueryKey } from "@/git/query-keys";
@@ -79,35 +79,23 @@ export function useCheckoutPrStatusQuery({
   cwd,
   enabled = true,
 }: UseCheckoutPrStatusQueryOptions) {
-  const queryClient = useQueryClient();
+  const { t } = useTranslation();
   const client = useHostRuntimeClient(serverId);
   const isConnected = useHostRuntimeIsConnected(serverId);
-
-  useEffect(() => {
-    if (!client || !isConnected || !cwd) {
-      return;
-    }
-
-    return client.on("checkout_status_update", (message) => {
-      const prStatus = message.payload.prStatus;
-      if (!prStatus || prStatus.cwd !== cwd) {
-        return;
-      }
-      queryClient.setQueryData(checkoutPrStatusQueryKey(serverId, cwd), prStatus);
-    });
-  }, [client, isConnected, cwd, queryClient, serverId]);
 
   const query = useQuery({
     queryKey: checkoutPrStatusQueryKey(serverId, cwd),
     queryFn: async () => {
       if (!client) {
-        throw new Error("Daemon client not available");
+        throw new Error(t("common.errors.daemonClientUnavailable"));
       }
       return await client.checkoutPrStatus(cwd);
     },
     enabled: !!client && isConnected && !!cwd && enabled,
     staleTime: Infinity,
-    refetchOnMount: false,
+    // Refetch on mount only after explicit invalidation (e.g. reconnect) — see
+    // useCheckoutStatusQuery for the rationale.
+    refetchOnMount: true,
     refetchOnReconnect: false,
     refetchOnWindowFocus: false,
   });
@@ -128,35 +116,23 @@ export function useWorkspacePrHint({
   cwd,
   enabled = true,
 }: UseCheckoutPrStatusQueryOptions): PrHint | null {
-  const queryClient = useQueryClient();
+  const { t } = useTranslation();
   const client = useHostRuntimeClient(serverId);
   const isConnected = useHostRuntimeIsConnected(serverId);
-
-  useEffect(() => {
-    if (!client || !isConnected || !cwd) {
-      return;
-    }
-
-    return client.on("checkout_status_update", (message) => {
-      const prStatus = message.payload.prStatus;
-      if (!prStatus || prStatus.cwd !== cwd) {
-        return;
-      }
-      queryClient.setQueryData(checkoutPrStatusQueryKey(serverId, cwd), prStatus);
-    });
-  }, [client, isConnected, cwd, queryClient, serverId]);
 
   const query = useQuery<CheckoutPrStatusPayload, Error, PrHint | null>({
     queryKey: checkoutPrStatusQueryKey(serverId, cwd),
     queryFn: async () => {
       if (!client) {
-        throw new Error("Daemon client not available");
+        throw new Error(t("common.errors.daemonClientUnavailable"));
       }
       return await client.checkoutPrStatus(cwd);
     },
     enabled: !!client && isConnected && !!cwd && enabled,
     staleTime: Infinity,
-    refetchOnMount: false,
+    // Refetch on mount only after explicit invalidation (e.g. reconnect) — see
+    // useCheckoutStatusQuery for the rationale.
+    refetchOnMount: true,
     refetchOnReconnect: false,
     refetchOnWindowFocus: false,
     select: selectWorkspacePrHint,

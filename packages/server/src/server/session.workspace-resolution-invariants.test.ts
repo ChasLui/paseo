@@ -138,6 +138,7 @@ function createHarness(input: {
         workspaces.delete(id);
       },
     }),
+    filesystem: { isDirectory: async () => true },
     chatService: createStub<SessionOptions["chatService"]>({}),
     scheduleService: createStub<SessionOptions["scheduleService"]>({}),
     loopService: createStub<SessionOptions["loopService"]>({}),
@@ -147,6 +148,7 @@ function createHarness(input: {
         unsubscribe: () => {},
       }),
       scheduleRefreshForCwd: () => {},
+      onWorkspaceStateMayHaveChanged: () => {},
       getMetrics: () => ({
         checkoutDiffTargetCount: 0,
         checkoutDiffSubscriptionCount: 0,

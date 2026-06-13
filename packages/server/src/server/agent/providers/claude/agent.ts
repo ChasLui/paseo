@@ -73,11 +73,14 @@ import {
   type AgentTimelineItem,
   type AgentUsage,
   type AgentRuntimeInfo,
+  type ImportableProviderSession,
+  type ImportProviderSessionContext,
+  type ImportProviderSessionInput,
+  type ListImportableSessionsOptions,
   type ListModelsOptions,
-  type ListPersistedAgentsOptions,
   type McpServerConfig,
-  type PersistedAgentDescriptor,
 } from "../../agent-sdk-types.js";
+import { importSessionFromPersistence } from "../../provider-session-import.js";
 import {
   checkProviderLaunchAvailable,
   createProviderEnv,
@@ -101,6 +104,49 @@ function readNonEmptyString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
 
+export function normalizeClaudeAskUserQuestionRequestInput(
+  toolName: string,
+  input: AgentMetadata,
+): AgentMetadata {
+  if (toolName !== "AskUserQuestion" || !Array.isArray(input.questions)) {
+    return input;
+  }
+
+  // Claude Code's AskUserQuestion schema says "Other" is host-provided, not a
+  // model-supplied option. Paseo's shared question UI uses allowOther for that
+  // freeform answer path.
+  return {
+    ...input,
+    questions: input.questions.map((item) => {
+      if (!isMetadata(item)) {
+        return item;
+      }
+      return {
+        ...item,
+        allowOther: true,
+      };
+    }),
+  };
+}
+
+function stripClaudeAskUserQuestionUiMetadata(input: AgentMetadata): AgentMetadata {
+  if (!Array.isArray(input.questions)) {
+    return input;
+  }
+
+  return {
+    ...input,
+    questions: input.questions.map((item) => {
+      if (!isMetadata(item) || !("allowOther" in item)) {
+        return item;
+      }
+      const itemForClaude: AgentMetadata = { ...item };
+      delete itemForClaude.allowOther;
+      return itemForClaude;
+    }),
+  };
+}
+
 export function normalizeClaudeAskUserQuestionUpdatedInput(
   updatedInput: AgentMetadata | undefined,
   fallbackInput: AgentMetadata | undefined,
@@ -111,7 +157,7 @@ export function normalizeClaudeAskUserQuestionUpdatedInput(
   // AskUserQuestion tool expects answer keys to match the full question text. Merge
   // the original request payload back in so provider callbacks that only return
   // `{ answers }` still satisfy Claude's full tool input schema.
-  const merged = { ...fallback, ...base };
+  const merged = stripClaudeAskUserQuestionUiMetadata({ ...fallback, ...base });
   const questions =
     (Array.isArray(base.questions) ? base.questions : null) ??
     (Array.isArray(fallback.questions) ? fallback.questions : null);
@@ -210,6 +256,7 @@ type ClaudeConversationRewindTarget =
 const CLAUDE_CAPABILITIES: AgentCapabilityFlags = {
   supportsStreaming: true,
   supportsSessionPersistence: true,
+  supportsSessionListing: true,
   supportsDynamicModes: true,
   supportsMcpServers: true,
   supportsReasoningStream: true,
@@ -255,6 +302,18 @@ const REWIND_COMMAND: AgentSlashCommand = {
   description: "Rewind tracked files to a previous user message",
   argumentHint: "[user_message_uuid]",
 };
+const CLAUDE_ROOT_ONLY_COMMANDS = new Set([
+  "clear",
+  "compact",
+  "context",
+  "debug",
+  "extra-usage",
+  "heapdump",
+  "init",
+  "loop",
+  "schedule",
+  "usage",
+]);
 const INTERRUPT_TOOL_USE_PLACEHOLDER = "[Request interrupted by user for tool use]";
 const INTERRUPT_PLACEHOLDER_PATTERN = /^\[Request interrupted by user(?:[^\]]*)\]$/;
 const NO_RESPONSE_REQUESTED_PLACEHOLDER = "No response requested.";
@@ -264,6 +323,13 @@ interface SlashCommandInvocation {
   commandName: string;
   args?: string;
   rawInput: string;
+}
+
+function classifyClaudeSlashCommand(commandName: string): AgentSlashCommand["kind"] {
+  // Claude exposes commands and skills as one flat SDK list, without structured source
+  // metadata. Keep obvious root-only/session controls out of inline autocomplete and
+  // treat the rest as skills; the worst failure mode is an inert inline suggestion.
+  return CLAUDE_ROOT_ONLY_COMMANDS.has(commandName) ? "command" : "skill";
 }
 
 type ClaudeAgentConfig = AgentSessionConfig & { provider: "claude" };
@@ -538,6 +604,9 @@ function isClaudeNoResponsePlaceholderText(value: unknown): boolean {
 
 const LOCAL_COMMAND_STDOUT_PATTERN =
   /^\s*<local-command-stdout>[\s\S]*<\/local-command-stdout>\s*$/;
+const CLAUDE_COMMAND_MESSAGE_PATTERN = /<command-message>([\s\S]*?)<\/command-message>/;
+const CLAUDE_COMMAND_ARGS_PATTERN = /<command-args>([\s\S]*?)<\/command-args>/;
+const CLAUDE_COMMAND_NAME_PATTERN = /<command-name>([\s\S]*?)<\/command-name>/;
 
 function isClaudeLocalCommandStdout(value: unknown): boolean {
   const normalized = normalizeClaudeTranscriptText(value);
@@ -593,7 +662,7 @@ export function extractUserMessageText(content: unknown): string | null {
     if (!normalized || isClaudeTranscriptNoiseText(normalized)) {
       return null;
     }
-    return normalized;
+    return normalizeClaudeUserPromptText(normalized);
   }
 
   if (!Array.isArray(content)) {
@@ -609,7 +678,10 @@ export function extractUserMessageText(content: unknown): string | null {
     if (text && text.trim()) {
       const trimmed = text.trim();
       if (!isClaudeTranscriptNoiseText(trimmed)) {
-        parts.push(trimmed);
+        const normalized = normalizeClaudeUserPromptText(trimmed);
+        if (normalized) {
+          parts.push(normalized);
+        }
       }
       continue;
     }
@@ -617,7 +689,10 @@ export function extractUserMessageText(content: unknown): string | null {
     if (input && input.trim()) {
       const trimmed = input.trim();
       if (!isClaudeTranscriptNoiseText(trimmed)) {
-        parts.push(trimmed);
+        const normalized = normalizeClaudeUserPromptText(trimmed);
+        if (normalized) {
+          parts.push(normalized);
+        }
       }
     }
   }
@@ -1351,9 +1426,9 @@ export class ClaudeAgentClient implements AgentClient {
     });
   }
 
-  async listPersistedAgents(
-    options?: ListPersistedAgentsOptions,
-  ): Promise<PersistedAgentDescriptor[]> {
+  async listImportableSessions(
+    options?: ListImportableSessionsOptions,
+  ): Promise<ImportableProviderSession[]> {
     const configDir = process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), ".claude");
     const projectsRoot = path.join(configDir, "projects");
     if (!(await pathExists(projectsRoot))) {
@@ -1365,8 +1440,17 @@ export class ClaudeAgentClient implements AgentClient {
       candidates.map((candidate) => parseClaudeSessionDescriptor(candidate.path, candidate.mtime)),
     );
     return parsed
-      .filter((descriptor): descriptor is PersistedAgentDescriptor => descriptor !== null)
+      .filter((session): session is ImportableProviderSession => session !== null)
       .slice(0, limit);
+  }
+
+  async importSession(input: ImportProviderSessionInput, context: ImportProviderSessionContext) {
+    return importSessionFromPersistence({
+      provider: "claude",
+      request: input,
+      context,
+      resumeSession: this.resumeSession.bind(this),
+    });
   }
 
   async isAvailable(): Promise<boolean> {
@@ -2081,6 +2165,7 @@ class ClaudeAgentSession implements AgentSession {
           name: cmd.name,
           description: cmd.description,
           argumentHint: cmd.argumentHint,
+          kind: classifyClaudeSlashCommand(cmd.name),
         });
       }
     }
@@ -3746,6 +3831,7 @@ class ClaudeAgentSession implements AgentSession {
   ): Promise<PermissionResult> => {
     const requestId = `permission-${randomUUID()}`;
     const kind = resolvePermissionKind(toolName, input);
+    const requestInput = normalizeClaudeAskUserQuestionRequestInput(toolName, input);
     const metadata: AgentMetadata = {};
     if (options.toolUseID) {
       metadata.toolUseId = options.toolUseID;
@@ -3768,7 +3854,7 @@ class ClaudeAgentSession implements AgentSession {
       provider: "claude",
       name: toolName,
       kind,
-      input,
+      input: requestInput,
       detail: toolDetail,
       suggestions: options.suggestions?.map((suggestion) => ({
         ...suggestion,
@@ -4907,7 +4993,8 @@ interface ClaudeSessionDescriptorAccumulator {
   sessionId: string | null;
   cwd: string | null;
   title: string | null;
-  timeline: AgentTimelineItem[];
+  firstPromptPreview: string | null;
+  lastPromptPreview: string | null;
 }
 
 function isFinishedAccumulator(acc: ClaudeSessionDescriptorAccumulator): boolean {
@@ -4940,22 +5027,18 @@ function applyClaudeSessionEntryToAccumulator(
       if (!acc.title) {
         acc.title = text;
       }
-      acc.timeline.push({ type: "user_message", text });
+      const preview = normalizeImportablePromptPreview(text);
+      acc.firstPromptPreview ??= preview;
+      acc.lastPromptPreview = preview;
     }
     return;
-  }
-  if (entry.type === "assistant" && entry.message) {
-    const text = extractClaudeUserText(entry.message);
-    if (text) {
-      acc.timeline.push({ type: "assistant_message", text });
-    }
   }
 }
 
 async function parseClaudeSessionDescriptor(
   filePath: string,
   mtime: Date,
-): Promise<PersistedAgentDescriptor | null> {
+): Promise<ImportableProviderSession | null> {
   let content: string;
   try {
     content = await fsPromises.readFile(filePath, "utf8");
@@ -4967,7 +5050,8 @@ async function parseClaudeSessionDescriptor(
     sessionId: null,
     cwd: null,
     title: null,
-    timeline: [],
+    firstPromptPreview: null,
+    lastPromptPreview: null,
   };
 
   for (const rawLine of content.split(/\r?\n/)) {
@@ -4985,31 +5069,58 @@ async function parseClaudeSessionDescriptor(
     }
   }
 
-  const { sessionId, cwd, title, timeline } = acc;
+  const { sessionId, cwd, title } = acc;
 
   if (!sessionId || !cwd) {
     return null;
   }
 
-  const persistence: AgentPersistenceHandle = {
-    provider: "claude",
-    sessionId,
-    nativeHandle: sessionId,
-    metadata: {
-      provider: "claude",
-      cwd,
-    },
-  };
-
   return {
-    provider: "claude",
-    sessionId,
+    providerHandleId: sessionId,
     cwd,
     title: (title ?? "").trim() || `Claude session ${sessionId.slice(0, 8)}`,
+    firstPromptPreview: acc.firstPromptPreview,
+    lastPromptPreview: acc.lastPromptPreview,
     lastActivityAt: mtime,
-    persistence,
-    timeline,
   };
+}
+
+function normalizeImportablePromptPreview(text: string): string | null {
+  const normalized = text.trim().replace(/\s+/g, " ");
+  if (!normalized) return null;
+  return normalized.length > 160 ? normalized.slice(0, 160) : normalized;
+}
+
+function normalizeClaudeUserPromptText(text: string): string | null {
+  const normalized = text.trim();
+  if (!CLAUDE_COMMAND_MESSAGE_PATTERN.test(normalized)) {
+    return normalized || null;
+  }
+
+  const command = readClaudeCommandPromptName(normalized);
+  if (!command) {
+    return null;
+  }
+
+  const commandArgs = normalized.match(CLAUDE_COMMAND_ARGS_PATTERN)?.[1]?.trim();
+  if (commandArgs) {
+    return `${command} ${commandArgs}`;
+  }
+
+  return command;
+}
+
+function readClaudeCommandPromptName(text: string): string | null {
+  const commandName = text.match(CLAUDE_COMMAND_NAME_PATTERN)?.[1]?.trim();
+  if (commandName) {
+    return commandName.startsWith("/") ? commandName : `/${commandName}`;
+  }
+
+  const commandMessage = text.match(CLAUDE_COMMAND_MESSAGE_PATTERN)?.[1]?.trim();
+  if (!commandMessage) {
+    return null;
+  }
+  return commandMessage.startsWith("/") ? commandMessage : `/${commandMessage}`;
 }
 
 function extractClaudeUserText(messageRaw: unknown): string | null {
@@ -5019,11 +5130,13 @@ function extractClaudeUserText(messageRaw: unknown): string | null {
   }
   if (typeof message.content === "string") {
     const normalized = message.content.trim();
-    return normalized && !isClaudeTranscriptNoiseText(normalized) ? normalized : null;
+    if (!normalized || isClaudeTranscriptNoiseText(normalized)) return null;
+    return normalizeClaudeUserPromptText(normalized);
   }
   if (typeof message.text === "string") {
     const normalized = message.text.trim();
-    return normalized && !isClaudeTranscriptNoiseText(normalized) ? normalized : null;
+    if (!normalized || isClaudeTranscriptNoiseText(normalized)) return null;
+    return normalizeClaudeUserPromptText(normalized);
   }
   if (isUnknownArray(message.content)) {
     for (const block of message.content) {
@@ -5031,7 +5144,7 @@ function extractClaudeUserText(messageRaw: unknown): string | null {
       if (blockRecord && typeof blockRecord.text === "string") {
         const normalized = blockRecord.text.trim();
         if (normalized && !isClaudeTranscriptNoiseText(normalized)) {
-          return normalized;
+          return normalizeClaudeUserPromptText(normalized);
         }
       }
     }

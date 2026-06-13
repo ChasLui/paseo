@@ -2,6 +2,7 @@ import { useRef, ReactNode, useCallback, useEffect } from "react";
 import { Buffer } from "buffer";
 import { AppState } from "react-native";
 import { useQueryClient } from "@tanstack/react-query";
+import { useTranslation } from "react-i18next";
 import { useClientActivity } from "@/hooks/use-client-activity";
 import { usePushTokenRegistration } from "@/hooks/use-push-token-registration";
 import { clearArchiveAgentPending } from "@/hooks/use-archive-agent";
@@ -68,6 +69,7 @@ import {
 import { isNative } from "@/constants/platform";
 import { useToast } from "@/contexts/toast-context";
 import { toErrorMessage } from "@/utils/error-messages";
+import { applyCheckoutStatusUpdateFromEvent } from "@/git/checkout-status-cache";
 
 // Re-export types from session-store and draft-store for backward compatibility
 export type { DraftInput } from "@/stores/draft-store";
@@ -440,6 +442,7 @@ export function SessionProvider(props: SessionProviderProps) {
 }
 
 function SessionProviderInternal({ children, serverId, client }: SessionProviderClientProps) {
+  const { t } = useTranslation();
   const voiceRuntime = useVoiceRuntimeOptional();
   const voiceAudioEngine = useVoiceAudioEngineOptional();
   const queryClient = useQueryClient();
@@ -908,25 +911,25 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
       serverId,
       setVoiceMode: async (enabled, agentId) => {
         if (!client) {
-          throw new Error("Daemon unavailable");
+          throw new Error(t("common.errors.daemonUnavailable"));
         }
         await client.setVoiceMode(enabled, agentId);
       },
       sendVoiceAudioChunk: async (audioData, mimeType) => {
         if (!client) {
-          throw new Error("Daemon unavailable");
+          throw new Error(t("common.errors.daemonUnavailable"));
         }
         await client.sendVoiceAudioChunk(audioData, mimeType);
       },
       audioPlayed: async (chunkId) => {
         if (!client) {
-          throw new Error("Daemon unavailable");
+          throw new Error(t("common.errors.daemonUnavailable"));
         }
         await client.audioPlayed(chunkId);
       },
       abortRequest: async () => {
         if (!client) {
-          throw new Error("Daemon unavailable");
+          throw new Error(t("common.errors.daemonUnavailable"));
         }
         await client.abortRequest();
       },
@@ -935,7 +938,7 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
       },
     });
     return () => unregister?.();
-  }, [client, serverId, setIsPlayingAudio, voiceRuntime]);
+  }, [client, serverId, setIsPlayingAudio, t, voiceRuntime]);
 
   useEffect(() => {
     voiceRuntime?.updateSessionConnection(serverId, isConnected);
@@ -1298,6 +1301,11 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
       setWorkspaces(serverId, (prev) => patchWorkspaceScripts(prev, message.payload));
     });
 
+    const unsubCheckoutStatusUpdate = client.on("checkout_status_update", (message) => {
+      if (message.type !== "checkout_status_update") return;
+      applyCheckoutStatusUpdateFromEvent({ queryClient, serverId, message });
+    });
+
     const unsubWorkspaceSetupProgress = client.on("workspace_setup_progress", (message) => {
       if (message.type !== "workspace_setup_progress") return;
       applyWorkspaceSetupProgress(message.payload);
@@ -1646,6 +1654,7 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
       unsubAgentTimeline();
       unsubWorkspaceUpdate();
       unsubScriptStatusUpdate();
+      unsubCheckoutStatusUpdate();
       unsubWorkspaceSetupProgress();
       unsubWorkspaceSetupStatusResponse();
       unsubStatus();

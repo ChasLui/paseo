@@ -22,6 +22,7 @@ import {
 } from "@getpaseo/protocol/binary-frames/index";
 import { TerminalOutputCoalescer } from "./terminal-output-coalescer.js";
 import {
+  MAX_CLIENT_BUFFERED_BYTES,
   MAX_TERMINAL_OUTPUT_FRAME_BYTES,
   encodeLegacyTerminalSnapshotFrame,
   encodeTerminalRestoreFrame,
@@ -65,10 +66,19 @@ export interface TerminalSessionControllerOptions {
   hasBinaryChannel: () => boolean;
   isPathWithinRoot: (rootPath: string, candidatePath: string) => boolean;
   sessionLogger: pino.Logger;
+  listTerminalWorkspaceRoots?: () => Promise<readonly string[]>;
   // Whether the connected client can reflow restored snapshots. When true the
   // daemon attaches per-row soft-wrap flags to snapshots; otherwise it omits them
   // so old (strict-schema) clients still parse the snapshot.
   clientSupportsWrapReflow?: () => boolean;
+  // Current max bytes queued on the client's transport(s) but not yet sent.
+  // Drives the snapshot catch-up fallback: a keeping-up client reports ~0 and
+  // keeps streaming; a backed-up client trips the snapshot path. Defaults to a
+  // constant 0 (no backpressure signal) so callers without a transport always
+  // stream.
+  // Bytes queued on the client transport but not yet sent, or null when the
+  // transport exposes no backpressure signal (e.g. the multiplexed relay socket).
+  getClientBufferedAmount?: () => number | null;
 }
 
 export interface TerminalSessionControllerMetrics {
@@ -108,7 +118,9 @@ export class TerminalSessionController {
   private readonly hasBinaryChannel: () => boolean;
   private readonly isPathWithinRoot: (rootPath: string, candidatePath: string) => boolean;
   private readonly sessionLogger: pino.Logger;
+  private readonly listTerminalWorkspaceRoots: () => Promise<readonly string[]>;
   private readonly clientSupportsWrapReflow: () => boolean;
+  private readonly getClientBufferedAmount: () => number | null;
 
   private readonly subscribedDirectories = new Set<string>();
   private unsubscribeTerminalsChanged: (() => void) | null = null;
@@ -124,7 +136,9 @@ export class TerminalSessionController {
     this.hasBinaryChannel = options.hasBinaryChannel;
     this.isPathWithinRoot = options.isPathWithinRoot;
     this.sessionLogger = options.sessionLogger;
+    this.listTerminalWorkspaceRoots = options.listTerminalWorkspaceRoots ?? (async () => []);
     this.clientSupportsWrapReflow = options.clientSupportsWrapReflow ?? (() => false);
+    this.getClientBufferedAmount = options.getClientBufferedAmount ?? (() => 0);
   }
 
   start(): void {
@@ -327,7 +341,7 @@ export class TerminalSessionController {
       return;
     }
     try {
-      const terminals = await this.terminalManager.getTerminals(cwd);
+      const terminals = await this.getTerminalsForWorkspaceRoot(cwd);
       for (const terminal of terminals) {
         this.ensureExitSubscription(terminal);
       }
@@ -359,7 +373,7 @@ export class TerminalSessionController {
     try {
       const terminals =
         typeof msg.cwd === "string"
-          ? await this.terminalManager.getTerminals(msg.cwd)
+          ? await this.getTerminalsForWorkspaceRoot(msg.cwd)
           : await this.getAllTerminalSessions();
       for (const terminal of terminals) {
         this.ensureExitSubscription(terminal);
@@ -395,6 +409,56 @@ export class TerminalSessionController {
       directories.map((cwd) => manager.getTerminals(cwd)),
     );
     return terminalsByDirectory.flat();
+  }
+
+  private async getTerminalsForWorkspaceRoot(cwd: string): Promise<TerminalSession[]> {
+    if (!this.terminalManager) {
+      return [];
+    }
+
+    const terminals = await this.terminalManager.getTerminals(cwd);
+    const workspaceRoots = await this.listTerminalWorkspaceRoots();
+    if (workspaceRoots.length === 0) {
+      return terminals;
+    }
+
+    return terminals.filter((terminal) =>
+      this.terminalBelongsToRoot(cwd, terminal.cwd, workspaceRoots),
+    );
+  }
+
+  private terminalBelongsToRoot(
+    rootCwd: string,
+    terminalCwd: string,
+    workspaceRoots: readonly string[],
+  ): boolean {
+    const ownerRoot = this.resolveTerminalOwnerRoot(terminalCwd, workspaceRoots);
+    if (!ownerRoot) {
+      return this.isPathWithinRoot(rootCwd, terminalCwd);
+    }
+    return this.isSamePath(rootCwd, ownerRoot);
+  }
+
+  private resolveTerminalOwnerRoot(
+    terminalCwd: string,
+    workspaceRoots: readonly string[],
+  ): string | null {
+    let ownerRoot: string | null = null;
+    for (const workspaceRoot of workspaceRoots) {
+      if (!this.isPathWithinRoot(workspaceRoot, terminalCwd)) {
+        continue;
+      }
+      if (!ownerRoot || workspaceRoot.length > ownerRoot.length) {
+        ownerRoot = workspaceRoot;
+      }
+    }
+    return ownerRoot;
+  }
+
+  private isSamePath(firstPath: string, secondPath: string): boolean {
+    return (
+      this.isPathWithinRoot(firstPath, secondPath) && this.isPathWithinRoot(secondPath, firstPath)
+    );
   }
 
   private async handleCreateTerminalRequest(msg: CreateTerminalRequest): Promise<void> {
@@ -704,7 +768,21 @@ export class TerminalSessionController {
             return;
           }
           activeStream.outputBytesSinceSnapshot += payload.byteLength;
-          if (activeStream.outputBytesSinceSnapshot > MAX_TERMINAL_OUTPUT_FRAME_BYTES) {
+          // Catch up via a snapshot only when the client is BOTH far behind in
+          // produced output AND actually backed up on the wire. A client that
+          // keeps draining reports ~0 buffered, so it streams continuously even
+          // past the byte threshold. outputBytesSinceSnapshot keeps accumulating
+          // in that case — it's harmless, it only gates the snapshot decision at
+          // the instant backpressure appears, and trySendSnapshot resets it to 0.
+          // A null reading means the transport exposes no backpressure signal
+          // (e.g. the multiplexed relay socket); there we can't tell a slow client
+          // from a fast one, so fall back unconditionally at the byte threshold to
+          // keep a slow relay client from falling unboundedly behind.
+          const clientBufferedAmount = this.getClientBufferedAmount();
+          if (
+            activeStream.outputBytesSinceSnapshot > MAX_TERMINAL_OUTPUT_FRAME_BYTES &&
+            (clientBufferedAmount === null || clientBufferedAmount > MAX_CLIENT_BUFFERED_BYTES)
+          ) {
             activeStream.restore = resolveRestoreAfterOutputOverflow(activeStream.restore);
             activeStream.needsSnapshot = true;
             void this.trySendSnapshot(activeStream);
@@ -824,6 +902,9 @@ export class TerminalSessionController {
         snapshot,
       }),
     );
+    // The snapshot frame went out-of-band; keep the replay that follows on the
+    // coalescer's trailing path so it doesn't flush back-to-back with it.
+    activeStream.outputCoalescer.markFlushed();
     return { shouldContinue: true, replayRevision: snapshot.revision };
   }
 
@@ -855,6 +936,9 @@ export class TerminalSessionController {
         snapshot,
       }),
     );
+    // The restore frame went out-of-band; keep the replay that follows on the
+    // coalescer's trailing path so it doesn't flush back-to-back with it.
+    activeStream.outputCoalescer.markFlushed();
     return { shouldContinue: true, replayRevision: snapshot.revision };
   }
 

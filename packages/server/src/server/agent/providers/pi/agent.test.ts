@@ -720,23 +720,14 @@ describe("PiRpcAgentClient", () => {
       providerParams: { sessionDir: sessionsDir },
     });
 
-    await expect(client.listPersistedAgents({ cwd })).resolves.toEqual([
+    await expect(client.listImportableSessions({ cwd })).resolves.toEqual([
       {
-        provider: "pi",
-        sessionId: "pi-session-jsonl",
+        providerHandleId: sessionFile,
         cwd,
         title: "Imported Pi session",
+        firstPromptPreview: "first prompt",
+        lastPromptPreview: "last prompt",
         lastActivityAt: new Date("2026-01-01T00:00:03.000Z"),
-        persistence: {
-          provider: "pi",
-          sessionId: "pi-session-jsonl",
-          nativeHandle: sessionFile,
-          metadata: { provider: "pi", cwd },
-        },
-        timeline: [
-          { type: "user_message", text: "first prompt" },
-          { type: "user_message", text: "last prompt" },
-        ],
       },
     ]);
   });
@@ -777,20 +768,94 @@ describe("PiRpcAgentClient", () => {
       },
     });
 
-    await expect(client.listPersistedAgents({ cwd })).resolves.toMatchObject([
+    await expect(client.listImportableSessions({ cwd })).resolves.toMatchObject([
       {
-        provider: "pi",
-        sessionId: "pi-default-session",
+        providerHandleId: sessionFile,
         cwd,
         title: "default dir prompt",
-        persistence: {
-          provider: "pi",
-          sessionId: "pi-default-session",
-          nativeHandle: sessionFile,
-          metadata: { provider: "pi", cwd },
-        },
+        firstPromptPreview: "default dir prompt",
+        lastPromptPreview: "default dir prompt",
       },
     ]);
+  });
+
+  test("imports JSONL sessions with the recorded model and thinking level", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "paseo-pi-import-config-"));
+    const cwd = path.join(root, "workspace");
+    const sessionsDir = path.join(root, "sessions");
+    mkdirSync(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "20260103_session.jsonl");
+    writeFileSync(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "session",
+          version: 3,
+          id: "pi-import-session",
+          timestamp: "2026-01-03T00:00:00.000Z",
+          cwd,
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "entry-1",
+          timestamp: "2026-01-03T00:00:01.000Z",
+          message: { role: "user", content: "first prompt" },
+        }),
+        JSON.stringify({
+          type: "model_change",
+          id: "model-1",
+          timestamp: "2026-01-03T00:00:02.000Z",
+          provider: "openrouter",
+          modelId: "anthropic/claude-sonnet-4.5",
+        }),
+        JSON.stringify({
+          type: "thinking_level_change",
+          id: "thinking-1",
+          timestamp: "2026-01-03T00:00:03.000Z",
+          thinkingLevel: "high",
+        }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+    const pi = new FakePi();
+    const client = new PiRpcAgentClient({
+      logger: pino({ level: "silent" }),
+      runtime: pi,
+      providerParams: { sessionDir: sessionsDir },
+    });
+
+    const imported = await client.importSession(
+      { providerHandleId: sessionFile, cwd },
+      { config: createConfig({ cwd }), storedConfig: createConfig({ cwd }) },
+    );
+
+    const actualLaunch = pi.recordedLaunches[0]!;
+    expect(actualLaunch.extensionPaths).toHaveLength(1);
+    expect(actualLaunch.argv).toEqual([
+      "pi",
+      "--mode",
+      "rpc",
+      "--model",
+      "openrouter/anthropic/claude-sonnet-4.5",
+      "--thinking",
+      "high",
+      "--session",
+      sessionFile,
+      "--extension",
+      actualLaunch.extensionPaths[0],
+    ]);
+    expect(imported.config).toMatchObject({
+      provider: "pi",
+      cwd,
+      model: "openrouter/anthropic/claude-sonnet-4.5",
+      thinkingOptionId: "high",
+    });
+    expect(imported.persistence.metadata).toMatchObject({
+      provider: "pi",
+      cwd,
+      model: "openrouter/anthropic/claude-sonnet-4.5",
+      thinkingOptionId: "high",
+    });
   });
 
   test("lists models from a short-lived Pi session in the requested cwd", async () => {
@@ -830,15 +895,17 @@ describe("PiRpcAgentClient", () => {
         name: "compact",
         description: "Manually compact the session context",
         argumentHint: "[instructions]",
+        kind: "command",
       },
       {
         name: "autocompact",
         description: "Toggle automatic context compaction",
         argumentHint: "[on|off|toggle]",
+        kind: "command",
       },
-      { name: "review", description: "Review changes", argumentHint: "" },
-      { name: "fix-tests", description: "Fix tests", argumentHint: "" },
-      { name: "skill:docs", description: "Read docs", argumentHint: "" },
+      { name: "review", description: "Review changes", argumentHint: "", kind: "command" },
+      { name: "fix-tests", description: "Fix tests", argumentHint: "", kind: "command" },
+      { name: "skill:docs", description: "Read docs", argumentHint: "", kind: "skill" },
     ]);
   });
 
@@ -852,11 +919,13 @@ describe("PiRpcAgentClient", () => {
       name: "compact",
       description: "Manually compact the session context",
       argumentHint: "[instructions]",
+      kind: "command",
     });
     await expect(session.listCommands()).resolves.toContainEqual({
       name: "autocompact",
       description: "Toggle automatic context compaction",
       argumentHint: "[on|off|toggle]",
+      kind: "command",
     });
   });
 
@@ -872,11 +941,13 @@ describe("PiRpcAgentClient", () => {
         name: "compact",
         description: "Compact from RPC",
         argumentHint: "[instructions]",
+        kind: "command",
       },
       {
         name: "autocompact",
         description: "Auto compact from RPC",
         argumentHint: "[on|off|toggle]",
+        kind: "command",
       },
     ]);
   });
@@ -1158,6 +1229,11 @@ describe("transformPiModels", () => {
           id: "openrouter/google/gemini-2.5-flash-lite",
           label: "openrouter/google/gemini_2.5 flash lite",
         },
+        {
+          provider: "pi",
+          id: "openrouter/openai/gpt-5.5",
+          label: "openrouter/OpenAI: GPT-5.5",
+        },
       ]),
     ).toEqual([
       {
@@ -1165,6 +1241,12 @@ describe("transformPiModels", () => {
         id: "openrouter/google/gemini-2.5-flash-lite",
         label: "gemini 2.5 flash lite",
         description: "openrouter/google/gemini_2.5 flash lite",
+      },
+      {
+        provider: "pi",
+        id: "openrouter/openai/gpt-5.5",
+        label: "GPT-5.5",
+        description: "openrouter/OpenAI: GPT-5.5",
       },
     ]);
   });

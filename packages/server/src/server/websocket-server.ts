@@ -2,6 +2,7 @@ import { WebSocket, WebSocketServer } from "ws";
 import type { IncomingMessage, Server as HTTPServer } from "http";
 import { basename, join } from "path";
 import { hostname as getHostname } from "node:os";
+import { monitorEventLoopDelay } from "node:perf_hooks";
 import type { AgentManager } from "./agent/agent-manager.js";
 import type { AgentStorage } from "./agent/agent-storage.js";
 import type { DownloadTokenStore } from "./file-download/token-store.js";
@@ -147,6 +148,7 @@ function createFallbackWorkspaceGitService(): WorkspaceGitService {
       unsubscribe: () => {},
     }),
     scheduleRefreshForCwd: () => {},
+    onWorkspaceStateMayHaveChanged: () => {},
     dispose: () => {},
   };
 }
@@ -378,6 +380,7 @@ export class VoiceAssistantWebSocketServer {
   private serverCapabilities: ServerCapabilities | undefined;
   private readonly runtimeMetrics = new WebSocketRuntimeMetricsWindow();
   private runtimeMetricsInterval: ReturnType<typeof setInterval> | null = null;
+  private eventLoopDelayMonitor: ReturnType<typeof monitorEventLoopDelay> | null = null;
   private unsubscribeSpeechReadiness: (() => void) | null = null;
   private unsubscribeDaemonConfigChange: (() => void) | null = null;
 
@@ -560,11 +563,30 @@ export class VoiceAssistantWebSocketServer {
   }
 
   private startRuntimeMetricsInterval(): void {
+    this.eventLoopDelayMonitor = monitorEventLoopDelay({ resolution: 10 });
+    this.eventLoopDelayMonitor.enable();
     const runtimeMetricsInterval = setInterval(() => {
       this.flushRuntimeMetrics();
     }, WS_RUNTIME_METRICS_FLUSH_MS);
     this.runtimeMetricsInterval = runtimeMetricsInterval;
     (runtimeMetricsInterval as unknown as { unref?: () => void }).unref?.();
+  }
+
+  // Main-loop stall visibility: terminal frames and agent traffic share one event
+  // loop, so delay percentiles here are the ground truth for "the daemon is busy".
+  private snapshotEventLoopDelay(): { p50Ms: number; p99Ms: number; maxMs: number } | null {
+    const monitor = this.eventLoopDelayMonitor;
+    if (!monitor) {
+      return null;
+    }
+    const toMs = (nanoseconds: number): number => Math.round(nanoseconds / 1e5) / 10;
+    const snapshot = {
+      p50Ms: toMs(monitor.percentile(50)),
+      p99Ms: toMs(monitor.percentile(99)),
+      maxMs: toMs(monitor.max),
+    };
+    monitor.reset();
+    return snapshot;
   }
 
   private verifyWsUpgrade(
@@ -677,6 +699,8 @@ export class VoiceAssistantWebSocketServer {
       this.runtimeMetricsInterval = null;
     }
     this.flushRuntimeMetrics({ final: true });
+    this.eventLoopDelayMonitor?.disable();
+    this.eventLoopDelayMonitor = null;
 
     const uniqueConnections = new Set<SessionConnection>([
       ...this.sessions.values(),
@@ -859,6 +883,22 @@ export class VoiceAssistantWebSocketServer {
           return;
         }
         this.sendBinaryToConnection(connection, frame);
+      },
+      getTransportBufferedAmount: () => {
+        if (!connection) {
+          return null;
+        }
+        // Relay-attached sockets are a WebSocketLike that doesn't expose
+        // bufferedAmount. Return null when no socket gives a signal so the
+        // terminal fallback can't mistake "no signal" for "client keeping up";
+        // a direct ws reports its real buffered bytes (0 when drained).
+        let maxBuffered: number | null = null;
+        for (const socket of connection.sockets) {
+          if (typeof socket.bufferedAmount === "number") {
+            maxBuffered = Math.max(maxBuffered ?? 0, socket.bufferedAmount);
+          }
+        }
+        return maxBuffered;
       },
       onLifecycleIntent: (intent) => {
         this.onLifecycleIntent?.(intent);
@@ -1054,6 +1094,7 @@ export class VoiceAssistantWebSocketServer {
         providersSnapshot: true,
         // COMPAT(checkoutGithubSetAutoMerge): added in v0.1.75, remove gate after 2026-11-13.
         checkoutGithubSetAutoMerge: true,
+        githubCheckDetails: true,
         // COMPAT(daemonStatusRpc): added in v0.1.76, remove gate after 2026-11-18.
         daemonStatusRpc: true,
         // COMPAT(terminalRestoreModes): added in v0.1.81, remove gate after 2026-11-23.
@@ -1639,6 +1680,7 @@ export class VoiceAssistantWebSocketServer {
         outboundAgentStreamAgentsTop: runtimeMetrics.outboundAgentStreamAgentsTop,
         outboundBinaryFrameTypesTop: runtimeMetrics.outboundBinaryFrameTypesTop,
         bufferedAmount: runtimeMetrics.bufferedAmount,
+        eventLoopDelay: this.snapshotEventLoopDelay(),
         runtime: sessionMetrics,
         latency: runtimeMetrics.latency,
         agents: agentSnapshot,
