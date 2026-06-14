@@ -343,6 +343,7 @@ export const es: TranslationResources = {
     },
     fileExplorer: {
       loadMore: "Cargar más",
+      previewTruncated: "Archivo grande: mostrando solo el principio",
       sort: {
         name: "Nombre",
         modified: "Modificado",

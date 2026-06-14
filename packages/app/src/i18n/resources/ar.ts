@@ -340,6 +340,7 @@ export const ar: TranslationResources = {
     },
     fileExplorer: {
       loadMore: "تحميل المزيد",
+      previewTruncated: "ملف كبير — يتم عرض البداية فقط",
       sort: {
         name: "اسم",
         modified: "معدل",

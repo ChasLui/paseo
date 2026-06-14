@@ -19,6 +19,9 @@ export interface ListDirectoryParams {
 export interface ReadFileParams {
   root: string;
   relativePath: string;
+  // COMPAT(fileRangeRead): added in v0.1.97. Read only [offset, offset+length) when set.
+  offset?: number;
+  length?: number;
 }
 
 export interface FileExplorerEntry {
@@ -46,6 +49,10 @@ export interface FileExplorerFile {
   mimeType?: string;
   size: number;
   modifiedAt: string;
+  // COMPAT(fileRangeRead): added in v0.1.97. Slice info for ranged reads; `size` stays
+  // the whole-file size, `content` holds the returned slice.
+  rangeStart?: number;
+  rangeLength?: number;
 }
 
 export interface FileExplorerFileBytes {
@@ -56,6 +63,8 @@ export interface FileExplorerFileBytes {
   mimeType: string;
   size: number;
   modifiedAt: string;
+  rangeStart?: number;
+  rangeLength?: number;
 }
 
 const TEXT_MIME_TYPES: Record<string, string> = {
@@ -203,8 +212,19 @@ export async function listDirectoryEntries({
 export async function readExplorerFile({
   root,
   relativePath,
+  offset,
+  length,
 }: ReadFileParams): Promise<FileExplorerFile> {
-  const file = await readExplorerFileBytes({ root, relativePath });
+  const file = await readExplorerFileBytes({
+    root,
+    relativePath,
+    offset,
+    length,
+  });
+  const rangeFields = {
+    rangeStart: file.rangeStart,
+    rangeLength: file.rangeLength,
+  };
 
   if (file.kind === "image") {
     return {
@@ -215,6 +235,7 @@ export async function readExplorerFile({
       mimeType: file.mimeType,
       size: file.size,
       modifiedAt: file.modifiedAt,
+      ...rangeFields,
     };
   }
 
@@ -226,6 +247,7 @@ export async function readExplorerFile({
       mimeType: file.mimeType,
       size: file.size,
       modifiedAt: file.modifiedAt,
+      ...rangeFields,
     };
   }
 
@@ -237,12 +259,15 @@ export async function readExplorerFile({
     mimeType: file.mimeType,
     size: file.size,
     modifiedAt: file.modifiedAt,
+    ...rangeFields,
   };
 }
 
 export async function readExplorerFileBytes({
   root,
   relativePath,
+  offset,
+  length,
 }: ReadFileParams): Promise<FileExplorerFileBytes> {
   const filePath = await resolveScopedPath({ root, relativePath });
   const handle = await openFileForRead(filePath.resolvedPath);
@@ -255,13 +280,43 @@ export async function readExplorerFileBytes({
     }
 
     const ext = path.extname(filePath.resolvedPath).toLowerCase();
+    // COMPAT(fileRangeRead): added in v0.1.97. When offset/length are given, read just
+    // that slice; `size` stays the whole-file size so the client knows how much remains.
+    // Images must be returned whole (a partial slice can't be decoded/rendered), so a
+    // range request is ignored for them.
+    const isRanged =
+      !(ext in IMAGE_MIME_TYPES) && (typeof offset === "number" || typeof length === "number");
+    const rangeStart = isRanged ? Math.min(Math.max(offset ?? 0, 0), stats.size) : 0;
+    const rangeLength = isRanged
+      ? Math.min(length ?? stats.size, stats.size - rangeStart)
+      : stats.size;
     const basePayload = {
       path: normalizeRelativePath({ root, targetPath: filePath.requestedPath }),
       size: stats.size,
       modifiedAt: stats.mtime.toISOString(),
+      ...(isRanged ? { rangeStart, rangeLength } : {}),
     };
 
-    const buffer = await handle.readFile();
+    let buffer: Buffer;
+    if (isRanged) {
+      const target = Buffer.alloc(rangeLength);
+      if (rangeLength > 0) {
+        const { bytesRead } = await handle.read(target, 0, rangeLength, rangeStart);
+        buffer = bytesRead < rangeLength ? target.subarray(0, bytesRead) : target;
+      } else {
+        buffer = target;
+      }
+    } else {
+      buffer = await handle.readFile();
+    }
+
+    // For ranged reads, classify text vs binary from the head sample of the slice
+    // rather than scanning the whole (possibly partial) buffer.
+    const classificationSample =
+      isRanged && buffer.length > FILE_TYPE_SAMPLE_BYTES
+        ? buffer.subarray(0, FILE_TYPE_SAMPLE_BYTES)
+        : buffer;
+
     if (ext in IMAGE_MIME_TYPES) {
       return {
         ...basePayload,
@@ -272,7 +327,7 @@ export async function readExplorerFileBytes({
       };
     }
 
-    if (isLikelyBinary(buffer)) {
+    if (isLikelyBinary(classificationSample)) {
       return {
         ...basePayload,
         kind: "binary",

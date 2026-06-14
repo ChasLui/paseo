@@ -5875,6 +5875,8 @@ export class Session {
       requestId,
       cursor,
       limit,
+      offset,
+      length,
     } = request;
     const cwd = workspaceCwd.trim();
     if (!cwd) {
@@ -5919,6 +5921,8 @@ export class Session {
           const file = await readExplorerFileBytes({
             root: cwd,
             relativePath: requestedPath,
+            offset,
+            length,
           });
 
           this.emitBinary(
@@ -5930,6 +5934,8 @@ export class Session {
                 size: file.size,
                 encoding: file.encoding,
                 modifiedAt: file.modifiedAt,
+                rangeStart: file.rangeStart,
+                rangeLength: file.rangeLength,
               },
             }),
           );
@@ -5950,6 +5956,8 @@ export class Session {
           const file = await readExplorerFile({
             root: cwd,
             relativePath: requestedPath,
+            offset,
+            length,
           });
 
           this.emit({

@@ -1109,6 +1109,8 @@ export class VoiceAssistantWebSocketServer {
         checkoutRefresh: true,
         // COMPAT(fileListPagination): added in v0.1.97, remove gate after 2026-12-13.
         fileListPagination: true,
+        // COMPAT(fileRangeRead): added in v0.1.97, remove gate after 2026-12-13.
+        fileRangeRead: true,
       },
     };
   }

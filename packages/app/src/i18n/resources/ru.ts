@@ -342,6 +342,7 @@ export const ru: TranslationResources = {
     },
     fileExplorer: {
       loadMore: "Загрузить ещё",
+      previewTruncated: "Большой файл — показано только начало",
       sort: {
         name: "Имя",
         modified: "Модифицированный",

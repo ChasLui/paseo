@@ -339,6 +339,7 @@ export const en = {
     },
     fileExplorer: {
       loadMore: "Load more",
+      previewTruncated: "Large file — showing the beginning only",
       sort: {
         name: "Name",
         modified: "Modified",

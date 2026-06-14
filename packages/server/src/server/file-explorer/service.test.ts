@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { listDirectoryEntries, readExplorerFile } from "./service.js";
+import { listDirectoryEntries, readExplorerFile, readExplorerFileBytes } from "./service.js";
 
 async function createHomeTempDir(prefix: string): Promise<string> {
   return mkdtemp(path.join(os.homedir(), prefix));
@@ -13,6 +13,74 @@ async function createTempDir(prefix: string): Promise<string> {
 }
 
 describe("file explorer service", () => {
+  it("reads a byte range of a text file with offset/length", async () => {
+    const root = await createTempDir("paseo-file-explorer-range-");
+
+    try {
+      await writeFile(path.join(root, "data.txt"), "0123456789abcdefghij", "utf-8");
+
+      const slice = await readExplorerFileBytes({
+        root,
+        relativePath: "data.txt",
+        offset: 5,
+        length: 4,
+      });
+
+      expect(slice.kind).toBe("text");
+      expect(slice.size).toBe(20); // whole-file size, not the slice length
+      expect(slice.rangeStart).toBe(5);
+      expect(slice.rangeLength).toBe(4);
+      expect(Buffer.from(slice.bytes).toString("utf-8")).toBe("5678");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("clamps a range that runs past the end of the file", async () => {
+    const root = await createTempDir("paseo-file-explorer-range-clamp-");
+
+    try {
+      await writeFile(path.join(root, "data.txt"), "short", "utf-8");
+
+      const slice = await readExplorerFileBytes({
+        root,
+        relativePath: "data.txt",
+        offset: 2,
+        length: 1000,
+      });
+
+      expect(slice.size).toBe(5);
+      expect(slice.rangeStart).toBe(2);
+      expect(slice.rangeLength).toBe(3);
+      expect(Buffer.from(slice.bytes).toString("utf-8")).toBe("ort");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores range requests for images and returns the whole file", async () => {
+    const root = await createTempDir("paseo-file-explorer-range-image-");
+
+    try {
+      const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01]);
+      await writeFile(path.join(root, "pixel.png"), png);
+
+      const slice = await readExplorerFileBytes({
+        root,
+        relativePath: "pixel.png",
+        offset: 0,
+        length: 2,
+      });
+
+      expect(slice.kind).toBe("image");
+      expect(slice.bytes.byteLength).toBe(png.byteLength);
+      expect(slice.rangeStart).toBeUndefined();
+      expect(slice.rangeLength).toBeUndefined();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("paginates large directories with a stable cursor", async () => {
     const root = await createTempDir("paseo-file-explorer-page-");
 

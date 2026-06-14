@@ -3394,11 +3394,19 @@ export class DaemonClient {
     return payload.directory;
   }
 
-  async readFile(cwd: string, path: string, requestId?: string): Promise<FileReadResult> {
+  async readFile(
+    cwd: string,
+    path: string,
+    requestId?: string,
+    options?: { offset?: number; length?: number },
+  ): Promise<FileReadResult> {
     const resolvedRequestId = this.createRequestId(requestId);
     this.pendingBinaryFileReads.set(resolvedRequestId, { cwd, path });
     try {
-      const payload = await this.requestFileExplorer(cwd, path, "file", resolvedRequestId, true);
+      const payload = await this.requestFileExplorer(cwd, path, "file", resolvedRequestId, true, {
+        offset: options?.offset,
+        length: options?.length,
+      });
       if (payload.error) {
         throw new Error(payload.error);
       }

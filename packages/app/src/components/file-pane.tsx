@@ -69,6 +69,10 @@ function formatFileSize({ size }: { size: number }): string {
   return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+// COMPAT(fileRangeRead): preview only the first 512 KB of a file; larger files are
+// truncated with a notice. Avoids huge frames and the 10s readFile timeout.
+const FILE_PREVIEW_HEAD_BYTES = 512 * 1024;
+
 async function createFilePanePreview(file: FileReadResult | null): Promise<{
   file: ExplorerFile | null;
   imageAttachment: AttachmentMetadata | null;
@@ -419,11 +423,19 @@ export function FilePane({
         };
       }
       try {
-        const file = await client.readFile(readTarget.cwd, readTarget.path);
+        // COMPAT(fileRangeRead): read only the head of large files so the preview renders
+        // fast and avoids the readFile timeout. The daemon returns the whole-file size, so
+        // we can tell when the content was truncated. Old daemons ignore the range and
+        // return the whole file (bytes.byteLength === size ⇒ not truncated).
+        const file = await client.readFile(readTarget.cwd, readTarget.path, undefined, {
+          offset: 0,
+          length: FILE_PREVIEW_HEAD_BYTES,
+        });
         const preview = await createFilePanePreview(file);
         return {
           file: preview.file,
           imageAttachment: preview.imageAttachment,
+          truncated: file ? file.bytes.byteLength < file.size : false,
           error: null,
         };
       } catch (error) {
@@ -444,6 +456,12 @@ export function FilePane({
       {query.data?.error ? (
         <View style={styles.centerState}>
           <Text style={styles.errorText}>{query.data.error}</Text>
+        </View>
+      ) : null}
+
+      {query.data?.truncated ? (
+        <View style={styles.truncatedBanner}>
+          <Text style={styles.truncatedText}>{t("workspace.fileExplorer.previewTruncated")}</Text>
         </View>
       ) : null}
 
@@ -478,6 +496,15 @@ const styles = StyleSheet.create((theme) => ({
   },
   errorText: {
     color: theme.colors.destructive,
+    fontSize: theme.fontSize.sm,
+    textAlign: "center",
+  },
+  truncatedBanner: {
+    paddingHorizontal: theme.spacing[3],
+    paddingVertical: theme.spacing[2],
+  },
+  truncatedText: {
+    color: theme.colors.foregroundMuted,
     fontSize: theme.fontSize.sm,
     textAlign: "center",
   },

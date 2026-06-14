@@ -340,6 +340,7 @@ export const zhCN: TranslationResources = {
     },
     fileExplorer: {
       loadMore: "加载更多",
+      previewTruncated: "文件较大，仅显示开头部分",
       sort: {
         name: "名称",
         modified: "修改时间",
