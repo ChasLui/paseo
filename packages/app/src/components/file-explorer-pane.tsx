@@ -45,6 +45,11 @@ import {
 import { useFileExplorerActions } from "@/hooks/use-file-explorer-actions";
 import { buildWorkspaceExplorerStateKey } from "@/hooks/use-file-explorer-actions";
 import { usePanelStore, type SortOption } from "@/stores/panel-store";
+import {
+  type TreeRow,
+  treeRowKeyExtractor,
+  resolveTreeRows,
+} from "@/components/file-explorer-tree";
 import { formatTimeAgo } from "@/utils/time";
 import { buildAbsoluteExplorerPath } from "@/utils/explorer-paths";
 import { useWebScrollViewScrollbar } from "@/components/use-web-scrollbar";
@@ -103,10 +108,6 @@ function sortTriggerStyle({
 
 function iconButtonStyle({ hovered, pressed }: PressableStateCallbackType & { hovered?: boolean }) {
   return [styles.iconButton, (Boolean(hovered) || pressed) && styles.iconButtonHovered];
-}
-
-function treeRowKeyExtractor(row: TreeRow) {
-  return row.kind === "loadMore" ? `load-more:${row.dirPath}` : row.entry.path;
 }
 
 function TreeRowItem({
@@ -223,10 +224,6 @@ interface FileExplorerPaneProps {
   workspaceRoot: string;
   onOpenFile?: (filePath: string) => void;
 }
-
-type TreeRow =
-  | { kind: "entry"; entry: ExplorerEntry; depth: number }
-  | { kind: "loadMore"; dirPath: string; depth: number };
 
 export function FileExplorerPane({
   serverId,
@@ -634,71 +631,6 @@ function FileExplorerPaneContent(props: FileExplorerPaneContentProps) {
   );
 }
 
-function sortEntries(entries: ExplorerEntry[], sortOption: SortOption): ExplorerEntry[] {
-  const sorted = [...entries];
-  sorted.sort((a, b) => {
-    if (a.kind !== b.kind) {
-      return a.kind === "directory" ? -1 : 1;
-    }
-    switch (sortOption) {
-      case "name":
-        return a.name.localeCompare(b.name);
-      case "modified":
-        return new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime();
-      case "size":
-        return b.size - a.size;
-      default:
-        return 0;
-    }
-  });
-  return sorted;
-}
-
-function buildTreeRows({
-  directories,
-  expandedPaths,
-  sortOption,
-  path,
-  depth,
-}: {
-  directories: Map<string, ExplorerDirectory>;
-  expandedPaths: Set<string>;
-  sortOption: SortOption;
-  path: string;
-  depth: number;
-}): TreeRow[] {
-  const directory = directories.get(path);
-  if (!directory) {
-    return [];
-  }
-
-  const rows: TreeRow[] = [];
-  const entries = sortEntries(directory.entries, sortOption);
-
-  for (const entry of entries) {
-    rows.push({ kind: "entry", entry, depth });
-    if (entry.kind === "directory" && expandedPaths.has(entry.path)) {
-      rows.push(
-        ...buildTreeRows({
-          directories,
-          expandedPaths,
-          sortOption,
-          path: entry.path,
-          depth: depth + 1,
-        }),
-      );
-    }
-  }
-
-  // COMPAT(fileListPagination): when the daemon paginated this directory, append a
-  // "load more" row so the user can fetch the next page on demand.
-  if (directory.hasMore) {
-    rows.push({ kind: "loadMore", dirPath: path, depth });
-  }
-
-  return rows;
-}
-
 function deriveExplorerFields(state: AgentFileExplorerState | undefined) {
   return {
     directories:
@@ -746,27 +678,6 @@ function resolveCurrentSortLabel(
   labels: Record<SortOption, string>,
 ): string {
   return labels[sortOption] ?? labels.name;
-}
-
-function resolveTreeRows({
-  directories,
-  expandedPaths,
-  sortOption,
-}: {
-  directories: Map<string, ExplorerDirectory>;
-  expandedPaths: Set<string>;
-  sortOption: SortOption;
-}): TreeRow[] {
-  if (!directories.get(".")) {
-    return [];
-  }
-  return buildTreeRows({
-    directories,
-    expandedPaths,
-    sortOption,
-    path: ".",
-    depth: 0,
-  });
 }
 
 type StartDownloadFn = ReturnType<typeof useDownloadStore.getState>["startDownload"];
