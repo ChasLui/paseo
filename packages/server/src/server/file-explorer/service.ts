@@ -10,6 +10,10 @@ export type ExplorerEncoding = "utf-8" | "base64" | "none";
 export interface ListDirectoryParams {
   root: string;
   relativePath?: string;
+  // COMPAT(fileListPagination): added in v0.1.97. When `limit` is set, return one page
+  // plus a cursor; `cursor` resumes after a previous page. Absent ⇒ legacy full listing.
+  cursor?: string;
+  limit?: number;
 }
 
 export interface ReadFileParams {
@@ -28,6 +32,10 @@ export interface FileExplorerEntry {
 export interface FileExplorerDirectory {
   path: string;
   entries: FileExplorerEntry[];
+  // COMPAT(fileListPagination): added in v0.1.97. Cursor for the next page, null when
+  // exhausted. Only populated for paginated (limit-bearing) requests.
+  nextCursor?: string | null;
+  hasMore?: boolean;
 }
 
 export interface FileExplorerFile {
@@ -86,9 +94,46 @@ interface EntryPayloadParams {
   kind: ExplorerEntryKind;
 }
 
+// COMPAT(fileListPagination): added in v0.1.97, remove gate after 2026-12-13.
+// Opaque cursor encodes the last returned entry's (modifiedAt, name) so the next page
+// resumes right after it under the stable (mtime desc, name asc) sort.
+interface DirectoryCursor {
+  modifiedAt: string;
+  name: string;
+}
+
+function compareEntries(
+  a: { modifiedAt: string; name: string },
+  b: { modifiedAt: string; name: string },
+): number {
+  const modifiedComparison = new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime();
+  if (modifiedComparison !== 0) {
+    return modifiedComparison;
+  }
+  return a.name.localeCompare(b.name);
+}
+
+function encodeDirectoryCursor(entry: DirectoryCursor): string {
+  return Buffer.from(JSON.stringify([entry.modifiedAt, entry.name]), "utf-8").toString("base64url");
+}
+
+function decodeDirectoryCursor(cursor: string): DirectoryCursor | null {
+  try {
+    const parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf-8"));
+    if (Array.isArray(parsed) && typeof parsed[0] === "string" && typeof parsed[1] === "string") {
+      return { modifiedAt: parsed[0], name: parsed[1] };
+    }
+  } catch {
+    // Malformed cursor ⇒ start from the beginning.
+  }
+  return null;
+}
+
 export async function listDirectoryEntries({
   root,
   relativePath = ".",
+  cursor,
+  limit,
 }: ListDirectoryParams): Promise<FileExplorerDirectory> {
   const directoryPath = await resolveScopedPath({ root, relativePath });
   const stats = await fs.stat(directoryPath.resolvedPath);
@@ -97,7 +142,9 @@ export async function listDirectoryEntries({
     throw new Error("Requested path is not a directory");
   }
 
-  const dirents = await fs.readdir(directoryPath.resolvedPath, { withFileTypes: true });
+  const dirents = await fs.readdir(directoryPath.resolvedPath, {
+    withFileTypes: true,
+  });
 
   const entriesWithNulls = await Promise.all(
     dirents.map(async (dirent) => {
@@ -122,18 +169,35 @@ export async function listDirectoryEntries({
   );
   const entries = entriesWithNulls.filter((entry): entry is FileExplorerEntry => entry !== null);
 
-  entries.sort((a, b) => {
-    const modifiedComparison = new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime();
-    if (modifiedComparison !== 0) {
-      return modifiedComparison;
-    }
-    return a.name.localeCompare(b.name);
+  entries.sort(compareEntries);
+
+  const listingPath = normalizeRelativePath({
+    root,
+    targetPath: directoryPath.requestedPath,
   });
 
-  return {
-    path: normalizeRelativePath({ root, targetPath: directoryPath.requestedPath }),
-    entries,
-  };
+  // Legacy/unpaginated request: return everything in one frame.
+  if (typeof limit !== "number") {
+    return { path: listingPath, entries };
+  }
+
+  // Paginated request. The full readdir+stat+sort above is unavoidable for a stable
+  // mtime sort; pagination only trims the transferred/rendered slice, not server cost
+  // (see docs/artifact-fs-evaluation.md §5 B-2, decision 5).
+  let startIndex = 0;
+  if (cursor) {
+    const decoded = decodeDirectoryCursor(cursor);
+    if (decoded) {
+      const found = entries.findIndex((entry) => compareEntries(entry, decoded) > 0);
+      startIndex = found === -1 ? entries.length : found;
+    }
+  }
+  const page = entries.slice(startIndex, startIndex + limit);
+  const hasMore = startIndex + page.length < entries.length;
+  const last = page[page.length - 1];
+  const nextCursor = hasMore && last ? encodeDirectoryCursor(last) : null;
+
+  return { path: listingPath, entries: page, nextCursor, hasMore };
 }
 
 export async function readExplorerFile({

@@ -15,6 +15,10 @@ export const FileBeginMetadataSchema = z.object({
   encoding: z.enum(["utf-8", "binary"]),
   modifiedAt: z.string(),
   fileName: z.string().optional(),
+  // COMPAT(fileRangeRead): added in v0.1.97, remove gate after 2026-12-13.
+  // Range-slice info when the transfer is a byte range. `size` stays the whole-file size.
+  rangeStart: z.number().int().nonnegative().optional(),
+  rangeLength: z.number().int().nonnegative().optional(),
 });
 
 export interface FileBegin {

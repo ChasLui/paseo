@@ -136,7 +136,9 @@ export const MutableDaemonConfigSchema = z
       })
       .passthrough(),
     providers: z.record(z.string(), MutableDaemonProviderConfigSchema).default({}),
-    metadataGeneration: MutableMetadataGenerationConfigSchema.default({ providers: [] }),
+    metadataGeneration: MutableMetadataGenerationConfigSchema.default({
+      providers: [],
+    }),
     autoArchiveAfterMerge: z.boolean().default(false),
     appendSystemPrompt: z.string().default(""),
     terminalProfiles: z.array(TerminalProfileSchema).optional(),
@@ -1690,11 +1692,21 @@ const FileExplorerFileSchema = z.object({
   mimeType: z.string().optional(),
   size: z.number(),
   modifiedAt: z.string(),
+  // COMPAT(fileRangeRead): added in v0.1.97, remove gate after 2026-12-13.
+  // Range-slice info when the request used offset/length. `size` remains the whole-file
+  // size; `content` holds the returned slice. Absent ⇒ whole-file response.
+  rangeStart: z.number().int().nonnegative().optional(),
+  rangeLength: z.number().int().nonnegative().optional(),
 });
 
 const FileExplorerDirectorySchema = z.object({
   path: z.string(),
   entries: z.array(FileExplorerEntrySchema),
+  // COMPAT(fileListPagination): added in v0.1.97, remove gate after 2026-12-13.
+  // Cursor pagination. `nextCursor` is the opaque cursor for the next page (null/absent
+  // ⇒ no more). `hasMore` mirrors it. Absent ⇒ legacy single-frame full listing.
+  nextCursor: z.string().nullable().optional(),
+  hasMore: z.boolean().optional(),
 });
 
 export const FileExplorerRequestSchema = z.object({
@@ -1704,6 +1716,15 @@ export const FileExplorerRequestSchema = z.object({
   mode: z.enum(["list", "file"]),
   requestId: z.string(),
   acceptBinary: z.boolean().optional(),
+  // COMPAT(fileRangeRead): added in v0.1.97, remove gate after 2026-12-13.
+  // Range read for mode:"file". Server returns the [offset, offset+length) byte slice
+  // plus the whole-file size. Old daemons ignore these and return the entire file.
+  offset: z.number().int().nonnegative().optional(),
+  length: z.number().int().positive().optional(),
+  // COMPAT(fileListPagination): added in v0.1.97, remove gate after 2026-12-13.
+  // Cursor pagination for mode:"list". Old daemons ignore these and return all entries.
+  cursor: z.string().optional(),
+  limit: z.number().int().positive().optional(),
 });
 
 export const ProjectIconRequestSchema = z.object({
@@ -2174,6 +2195,10 @@ export const ServerInfoStatusPayloadSchema = z
         rewind: z.boolean().optional(),
         // COMPAT(checkoutRefresh): added in v0.1.86, remove gate after 2026-11-29.
         checkoutRefresh: z.boolean().optional(),
+        // COMPAT(fileRangeRead): added in v0.1.97, remove gate after 2026-12-13.
+        fileRangeRead: z.boolean().optional(),
+        // COMPAT(fileListPagination): added in v0.1.97, remove gate after 2026-12-13.
+        fileListPagination: z.boolean().optional(),
       })
       .optional(),
   })

@@ -876,7 +876,11 @@ export class DaemonClient {
     string,
     {
       cwd: string;
-      compare: { mode: "uncommitted" | "base"; baseRef?: string; ignoreWhitespace?: boolean };
+      compare: {
+        mode: "uncommitted" | "base";
+        baseRef?: string;
+        ignoreWhitespace?: boolean;
+      };
     }
   >();
   private terminalDirectorySubscriptions = new Set<string>();
@@ -1485,10 +1489,9 @@ export class DaemonClient {
     TResult = CorrelatedResponsePayload<TResponseType>,
   >(params: {
     requestId?: string;
-    message: { type: Extract<SessionInboundMessage["type"], `${string}.request`> } & Record<
-      string,
-      unknown
-    >;
+    message: {
+      type: Extract<SessionInboundMessage["type"], `${string}.request`>;
+    } & Record<string, unknown>;
     timeout: number;
     selectPayload?: (payload: CorrelatedResponsePayload<TResponseType>) => TResult | null;
   }): Promise<TResult> {
@@ -2100,7 +2103,10 @@ export class DaemonClient {
       type: "import_agent_request",
       requestId,
       ...("providerId" in input
-        ? { providerId: input.providerId, providerHandleId: input.providerHandleId }
+        ? {
+            providerId: input.providerId,
+            providerHandleId: input.providerHandleId,
+          }
         : { provider: input.provider, sessionId: input.sessionId }),
       ...(input.cwd ? { cwd: input.cwd } : {}),
       ...(input.labels && Object.keys(input.labels).length > 0 ? { labels: input.labels } : {}),
@@ -2506,7 +2512,12 @@ export class DaemonClient {
   }
 
   async sendVoiceAudioChunk(audio: string, format: string, isLast = false): Promise<void> {
-    this.sendSessionMessage({ type: "voice_audio_chunk", audio, format, isLast });
+    this.sendSessionMessage({
+      type: "voice_audio_chunk",
+      audio,
+      format,
+      isLast,
+    });
   }
 
   async startDictationStream(dictationId: string, format: string): Promise<void> {
@@ -2547,7 +2558,11 @@ export class DaemonClient {
 
     const cleanupError = new Error("Cancelled dictation start waiter");
     try {
-      this.sendSessionMessageStrict({ type: "dictation_stream_start", dictationId, format });
+      this.sendSessionMessageStrict({
+        type: "dictation_stream_start",
+        dictationId,
+        format,
+      });
       await Promise.race([ackPromise, errorPromise]);
     } finally {
       ack.cancel(cleanupError);
@@ -2683,7 +2698,11 @@ export class DaemonClient {
 
     const cleanupError = new Error("Cancelled dictation finish waiter");
     try {
-      this.sendSessionMessageStrict({ type: "dictation_stream_finish", dictationId, finalSeq });
+      this.sendSessionMessageStrict({
+        type: "dictation_stream_finish",
+        dictationId,
+        finalSeq,
+      });
       const firstOutcome = await Promise.race([
         finalOutcomePromise,
         errorOutcomePromise,
@@ -2715,7 +2734,10 @@ export class DaemonClient {
   }
 
   cancelDictationStream(dictationId: string): void {
-    this.sendSessionMessageStrict({ type: "dictation_stream_cancel", dictationId });
+    this.sendSessionMessageStrict({
+      type: "dictation_stream_cancel",
+      dictationId,
+    });
   }
 
   async abortRequest(): Promise<void> {
@@ -2784,7 +2806,11 @@ export class DaemonClient {
     mode: "uncommitted" | "base";
     baseRef?: string;
     ignoreWhitespace?: boolean;
-  }): { mode: "uncommitted" | "base"; baseRef?: string; ignoreWhitespace?: boolean } {
+  }): {
+    mode: "uncommitted" | "base";
+    baseRef?: string;
+    ignoreWhitespace?: boolean;
+  } {
     if (compare.mode === "uncommitted") {
       return compare.ignoreWhitespace === true
         ? { mode: "uncommitted", ignoreWhitespace: true }
@@ -2803,7 +2829,11 @@ export class DaemonClient {
 
   async getCheckoutDiff(
     cwd: string,
-    compare: { mode: "uncommitted" | "base"; baseRef?: string; ignoreWhitespace?: boolean },
+    compare: {
+      mode: "uncommitted" | "base";
+      baseRef?: string;
+      ignoreWhitespace?: boolean;
+    },
     requestId?: string,
   ): Promise<CheckoutDiffPayload> {
     const oneShotSubscriptionId = `oneshot-checkout-diff:${crypto.randomUUID()}`;
@@ -2829,7 +2859,11 @@ export class DaemonClient {
 
   async subscribeCheckoutDiff(
     cwd: string,
-    compare: { mode: "uncommitted" | "base"; baseRef?: string; ignoreWhitespace?: boolean },
+    compare: {
+      mode: "uncommitted" | "base";
+      baseRef?: string;
+      ignoreWhitespace?: boolean;
+    },
     options?: { subscriptionId?: string; requestId?: string },
   ): Promise<SubscribeCheckoutDiffPayload> {
     const subscriptionId = options?.subscriptionId ?? crypto.randomUUID();
@@ -2901,7 +2935,11 @@ export class DaemonClient {
 
   async checkoutMerge(
     cwd: string,
-    input: { baseRef?: string; strategy?: "merge" | "squash"; requireCleanTarget?: boolean },
+    input: {
+      baseRef?: string;
+      strategy?: "merge" | "squash";
+      requireCleanTarget?: boolean;
+    },
     requestId?: string,
   ): Promise<CheckoutMergePayload> {
     return this.sendCorrelatedSessionRequest({
@@ -3064,7 +3102,12 @@ export class DaemonClient {
   }
 
   async pullRequestTimeline(
-    input: { cwd: string; prNumber: number; repoOwner: string; repoName: string },
+    input: {
+      cwd: string;
+      prNumber: number;
+      repoOwner: string;
+      repoName: string;
+    },
     requestId?: string,
   ): Promise<PullRequestTimelinePayload> {
     return this.sendCorrelatedSessionRequest({
@@ -3248,7 +3291,12 @@ export class DaemonClient {
   }
 
   async searchGitHub(
-    options: { cwd: string; query: string; limit?: number; kinds?: GitHubSearchRequest["kinds"] },
+    options: {
+      cwd: string;
+      query: string;
+      limit?: number;
+      kinds?: GitHubSearchRequest["kinds"];
+    },
     requestId?: string,
   ): Promise<GitHubSearchPayload> {
     return this.sendCorrelatedSessionRequest({
@@ -3302,6 +3350,12 @@ export class DaemonClient {
     mode: "list" | "file",
     requestId?: string,
     acceptBinary = false,
+    extras?: {
+      cursor?: string;
+      limit?: number;
+      offset?: number;
+      length?: number;
+    },
   ): Promise<FileExplorerPayload> {
     return this.sendCorrelatedSessionRequest({
       requestId,
@@ -3311,6 +3365,10 @@ export class DaemonClient {
         path,
         mode,
         ...(acceptBinary ? { acceptBinary: true } : {}),
+        ...(extras?.cursor !== undefined ? { cursor: extras.cursor } : {}),
+        ...(extras?.limit !== undefined ? { limit: extras.limit } : {}),
+        ...(extras?.offset !== undefined ? { offset: extras.offset } : {}),
+        ...(extras?.length !== undefined ? { length: extras.length } : {}),
       },
       responseType: "file_explorer_response",
       timeout: 10000,
@@ -3321,8 +3379,12 @@ export class DaemonClient {
     cwd: string,
     path: string,
     requestId?: string,
+    options?: { cursor?: string; limit?: number },
   ): Promise<FileExplorerDirectoryPayload> {
-    const payload = await this.requestFileExplorer(cwd, path, "list", requestId);
+    const payload = await this.requestFileExplorer(cwd, path, "list", requestId, false, {
+      cursor: options?.cursor,
+      limit: options?.limit,
+    });
     if (payload.error) {
       throw new Error(payload.error);
     }
@@ -4608,7 +4670,10 @@ export class DaemonClient {
   }
 
   setReconnectEnabled(enabled: boolean): void {
-    this.config = { ...this.config, reconnect: { ...this.config.reconnect, enabled } };
+    this.config = {
+      ...this.config,
+      reconnect: { ...this.config.reconnect, enabled },
+    };
   }
 
   private scheduleReconnect(input?: {
