@@ -342,6 +342,7 @@ export const es: TranslationResources = {
       scriptsAccessibility: "GuionesWorkspace",
     },
     fileExplorer: {
+      loadMore: "Cargar más",
       sort: {
         name: "Nombre",
         modified: "Modificado",

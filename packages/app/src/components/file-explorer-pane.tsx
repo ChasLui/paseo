@@ -27,7 +27,11 @@ import {
 } from "lucide-react-native";
 import { getFileIconSvg } from "@/components/material-file-icons";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
-import type { AgentFileExplorerState, ExplorerEntry } from "@/stores/session-store";
+import type {
+  AgentFileExplorerState,
+  ExplorerDirectory,
+  ExplorerEntry,
+} from "@/stores/session-store";
 import { useHosts } from "@/runtime/host-runtime";
 import { useSessionStore } from "@/stores/session-store";
 import { useDownloadStore } from "@/stores/download-store";
@@ -102,7 +106,7 @@ function iconButtonStyle({ hovered, pressed }: PressableStateCallbackType & { ho
 }
 
 function treeRowKeyExtractor(row: TreeRow) {
-  return row.entry.path;
+  return row.kind === "loadMore" ? `load-more:${row.dirPath}` : row.entry.path;
 }
 
 function TreeRowItem({
@@ -220,10 +224,9 @@ interface FileExplorerPaneProps {
   onOpenFile?: (filePath: string) => void;
 }
 
-interface TreeRow {
-  entry: ExplorerEntry;
-  depth: number;
-}
+type TreeRow =
+  | { kind: "entry"; entry: ExplorerEntry; depth: number }
+  | { kind: "loadMore"; dirPath: string; depth: number };
 
 export function FileExplorerPane({
   serverId,
@@ -260,12 +263,22 @@ export function FileExplorerPane({
       : undefined,
   );
 
-  const { requestDirectoryListing, requestFileDownloadToken, selectExplorerEntry } =
-    useFileExplorerActions({
-      serverId,
-      workspaceId,
-      workspaceRoot: normalizedWorkspaceRoot,
-    });
+  const {
+    requestDirectoryListing,
+    loadMoreDirectoryEntries,
+    requestFileDownloadToken,
+    selectExplorerEntry,
+  } = useFileExplorerActions({
+    serverId,
+    workspaceId,
+    workspaceRoot: normalizedWorkspaceRoot,
+  });
+  const handleLoadMore = useCallback(
+    (dirPath: string) => {
+      void loadMoreDirectoryEntries(dirPath);
+    },
+    [loadMoreDirectoryEntries],
+  );
   const sortOption = usePanelStore((state) => state.explorerSortOption);
   const setSortOption = usePanelStore((state) => state.setExplorerSortOption);
   const expandedPathsArray = usePanelStore((state) =>
@@ -431,6 +444,7 @@ export function FileExplorerPane({
         onEntryPress={handleEntryPress}
         onCopyPath={handleCopyPath}
         onDownloadEntry={handleDownloadEntry}
+        onLoadMore={handleLoadMore}
       />
     ),
     [
@@ -438,6 +452,7 @@ export function FileExplorerPane({
       handleEntryPress,
       handleCopyPath,
       handleDownloadEntry,
+      handleLoadMore,
       isDirectoryLoading,
       selectedEntryPath,
     ],
@@ -646,7 +661,7 @@ function buildTreeRows({
   path,
   depth,
 }: {
-  directories: Map<string, { path: string; entries: ExplorerEntry[] }>;
+  directories: Map<string, ExplorerDirectory>;
   expandedPaths: Set<string>;
   sortOption: SortOption;
   path: string;
@@ -661,7 +676,7 @@ function buildTreeRows({
   const entries = sortEntries(directory.entries, sortOption);
 
   for (const entry of entries) {
-    rows.push({ entry, depth });
+    rows.push({ kind: "entry", entry, depth });
     if (entry.kind === "directory" && expandedPaths.has(entry.path)) {
       rows.push(
         ...buildTreeRows({
@@ -673,6 +688,12 @@ function buildTreeRows({
         }),
       );
     }
+  }
+
+  // COMPAT(fileListPagination): when the daemon paginated this directory, append a
+  // "load more" row so the user can fetch the next page on demand.
+  if (directory.hasMore) {
+    rows.push({ kind: "loadMore", dirPath: path, depth });
   }
 
   return rows;
@@ -732,14 +753,20 @@ function resolveTreeRows({
   expandedPaths,
   sortOption,
 }: {
-  directories: Map<string, { path: string; entries: ExplorerEntry[] }>;
+  directories: Map<string, ExplorerDirectory>;
   expandedPaths: Set<string>;
   sortOption: SortOption;
 }): TreeRow[] {
   if (!directories.get(".")) {
     return [];
   }
-  return buildTreeRows({ directories, expandedPaths, sortOption, path: ".", depth: 0 });
+  return buildTreeRows({
+    directories,
+    expandedPaths,
+    sortOption,
+    path: ".",
+    depth: 0,
+  });
 }
 
 type StartDownloadFn = ReturnType<typeof useDownloadStore.getState>["startDownload"];
@@ -786,7 +813,7 @@ function toggleDirectory({
   entry: ExplorerEntry;
   workspaceStateKey: string | null;
   expandedPaths: Set<string>;
-  directories: Map<string, { path: string; entries: ExplorerEntry[] }>;
+  directories: Map<string, ExplorerDirectory>;
   requestDirectoryListing: (
     path: string,
     opts?: { recordHistory?: boolean; setCurrentPath?: boolean },
@@ -813,6 +840,45 @@ function toggleDirectory({
   }
 }
 
+function LoadMoreRow({
+  dirPath,
+  depth,
+  onLoadMore,
+}: {
+  dirPath: string;
+  depth: number;
+  onLoadMore: (dirPath: string) => void;
+}) {
+  const { theme } = useUnistyles();
+  const { t } = useTranslation();
+  const handlePress = useCallback(() => {
+    onLoadMore(dirPath);
+  }, [onLoadMore, dirPath]);
+
+  const pressableStyle = useCallback(
+    ({ hovered, pressed }: PressableStateCallbackType & { hovered?: boolean }) => [
+      styles.entryRow,
+      { paddingLeft: theme.spacing[2] + depth * INDENT_PER_LEVEL },
+      (Boolean(hovered) || pressed) && styles.entryRowActive,
+    ],
+    [depth, theme.spacing],
+  );
+
+  return (
+    <Pressable onPress={handlePress} style={pressableStyle}>
+      {depth > 0 && Array.from({ length: depth }, (_, i) => <IndentGuide key={i} index={i} />)}
+      <View style={styles.entryInfo}>
+        <View style={styles.entryIcon}>
+          <ChevronDown size={16} color={theme.colors.foregroundMuted} />
+        </View>
+        <Text style={styles.entryName} numberOfLines={1}>
+          {t("workspace.fileExplorer.loadMore")}
+        </Text>
+      </View>
+    </Pressable>
+  );
+}
+
 function TreeRowDispatcher({
   info,
   expandedPaths,
@@ -821,6 +887,7 @@ function TreeRowDispatcher({
   onEntryPress,
   onCopyPath,
   onDownloadEntry,
+  onLoadMore,
 }: {
   info: ListRenderItemInfo<TreeRow>;
   expandedPaths: Set<string>;
@@ -829,9 +896,14 @@ function TreeRowDispatcher({
   onEntryPress: (entry: ExplorerEntry) => void;
   onCopyPath: (path: string) => void | Promise<void>;
   onDownloadEntry: (entry: ExplorerEntry) => void;
+  onLoadMore: (dirPath: string) => void;
 }) {
-  const entry = info.item.entry;
-  const depth = info.item.depth;
+  const row = info.item;
+  if (row.kind === "loadMore") {
+    return <LoadMoreRow dirPath={row.dirPath} depth={row.depth} onLoadMore={onLoadMore} />;
+  }
+  const entry = row.entry;
+  const depth = row.depth;
   const isDirectory = entry.kind === "directory";
   const isExpanded = isDirectory && expandedPaths.has(entry.path);
   const isSelected = selectedEntryPath === entry.path;

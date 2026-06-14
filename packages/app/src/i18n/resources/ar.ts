@@ -339,6 +339,7 @@ export const ar: TranslationResources = {
       scriptsAccessibility: "البرامج النصية Workspace",
     },
     fileExplorer: {
+      loadMore: "تحميل المزيد",
       sort: {
         name: "اسم",
         modified: "معدل",

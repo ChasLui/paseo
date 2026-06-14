@@ -342,6 +342,7 @@ export const fr: TranslationResources = {
       scriptsAccessibility: "ScriptsWorkspace",
     },
     fileExplorer: {
+      loadMore: "Charger plus",
       sort: {
         name: "Nom",
         modified: "Modifié",

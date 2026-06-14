@@ -338,6 +338,7 @@ export const en = {
       scriptsAccessibility: "Workspace scripts",
     },
     fileExplorer: {
+      loadMore: "Load more",
       sort: {
         name: "Name",
         modified: "Modified",

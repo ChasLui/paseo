@@ -3,6 +3,10 @@ import { useTranslation } from "react-i18next";
 import { useSessionStore, type AgentFileExplorerState } from "@/stores/session-store";
 import { explorerFileFromReadResult } from "@/file-explorer/read-result";
 
+// COMPAT(fileListPagination): page size for paginated directory listings. Large directories
+// come back one page at a time; smaller directories fit in a single page (hasMore=false).
+const DIRECTORY_PAGE_LIMIT = 500;
+
 function createExplorerState(): AgentFileExplorerState {
   return {
     directories: new Map(),
@@ -133,7 +137,12 @@ export function useFileExplorerActions(params: { serverId: string } & FileExplor
       }
 
       try {
-        const directory = await client.listDirectory(normalizedWorkspaceRoot, normalizedPath);
+        const directory = await client.listDirectory(
+          normalizedWorkspaceRoot,
+          normalizedPath,
+          undefined,
+          { limit: DIRECTORY_PAGE_LIMIT },
+        );
         updateExplorerState((state) => {
           const nextState: AgentFileExplorerState = {
             ...state,
@@ -165,6 +174,53 @@ export function useFileExplorerActions(params: { serverId: string } & FileExplor
       }
     },
     [client, normalizedWorkspaceRoot, t, updateExplorerState, workspaceStateKey],
+  );
+
+  const loadMoreDirectoryEntries = useCallback(
+    async (path: string): Promise<boolean> => {
+      if (!workspaceStateKey || !normalizedWorkspaceRoot || !client) {
+        return false;
+      }
+      const normalizedPath = path && path.length > 0 ? path : ".";
+      const currentDirectory = useSessionStore
+        .getState()
+        .sessions[serverId]?.fileExplorer.get(workspaceStateKey)
+        ?.directories.get(normalizedPath);
+      const cursor = currentDirectory?.nextCursor;
+      if (!cursor) {
+        return false;
+      }
+      try {
+        const nextPage = await client.listDirectory(
+          normalizedWorkspaceRoot,
+          normalizedPath,
+          undefined,
+          { cursor, limit: DIRECTORY_PAGE_LIMIT },
+        );
+        updateExplorerState((state) => {
+          const directories = new Map(state.directories);
+          const existing = directories.get(normalizedPath);
+          directories.set(normalizedPath, {
+            path: nextPage.path,
+            entries: existing ? [...existing.entries, ...nextPage.entries] : nextPage.entries,
+            nextCursor: nextPage.nextCursor,
+            hasMore: nextPage.hasMore,
+          });
+          return { ...state, directories };
+        });
+        return true;
+      } catch (error) {
+        updateExplorerState((state) => ({
+          ...state,
+          lastError:
+            error instanceof Error
+              ? error.message
+              : t("workspace.fileExplorer.errors.failedToListDirectory"),
+        }));
+        return false;
+      }
+    },
+    [client, normalizedWorkspaceRoot, serverId, t, updateExplorerState, workspaceStateKey],
   );
 
   const requestFilePreview = useCallback(
@@ -261,6 +317,7 @@ export function useFileExplorerActions(params: { serverId: string } & FileExplor
   return {
     workspaceStateKey,
     requestDirectoryListing,
+    loadMoreDirectoryEntries,
     requestFilePreview,
     requestFileDownloadToken,
     selectExplorerEntry,

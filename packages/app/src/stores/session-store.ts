@@ -221,9 +221,13 @@ export interface ExplorerFile {
   modifiedAt: string;
 }
 
-interface ExplorerDirectory {
+export interface ExplorerDirectory {
   path: string;
   entries: ExplorerEntry[];
+  // COMPAT(fileListPagination): added in v0.1.97. Cursor for the next page (null/absent
+  // ⇒ no more); only populated when the daemon paginated a large directory.
+  nextCursor?: string | null;
+  hasMore?: boolean;
 }
 
 interface ExplorerRequestState {
@@ -448,7 +452,14 @@ interface SessionStoreActions {
     value:
       | Map<string, Array<{ id: string; text: string; attachments: ComposerAttachment[] }>>
       | ((
-          prev: Map<string, Array<{ id: string; text: string; attachments: ComposerAttachment[] }>>,
+          prev: Map<
+            string,
+            Array<{
+              id: string;
+              text: string;
+              attachments: ComposerAttachment[];
+            }>
+          >,
         ) => Map<string, Array<{ id: string; text: string; attachments: ComposerAttachment[] }>>),
   ) => void;
 
@@ -979,7 +990,10 @@ export const useSessionStore = create<SessionStore>()(
             ...prev,
             sessions: {
               ...prev.sessions,
-              [serverId]: { ...session, agentTimelineOlderFetchInFlight: nextState },
+              [serverId]: {
+                ...session,
+                agentTimelineOlderFetchInFlight: nextState,
+              },
             },
           };
         });

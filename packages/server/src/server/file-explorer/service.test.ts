@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { readExplorerFile } from "./service.js";
+import { listDirectoryEntries, readExplorerFile } from "./service.js";
 
 async function createHomeTempDir(prefix: string): Promise<string> {
   return mkdtemp(path.join(os.homedir(), prefix));
@@ -13,6 +13,62 @@ async function createTempDir(prefix: string): Promise<string> {
 }
 
 describe("file explorer service", () => {
+  it("paginates large directories with a stable cursor", async () => {
+    const root = await createTempDir("paseo-file-explorer-page-");
+
+    try {
+      const names = ["alpha.txt", "bravo.txt", "charlie.txt", "delta.txt", "echo.txt"];
+      for (const name of names) {
+        await writeFile(path.join(root, name), `content of ${name}\n`, "utf-8");
+      }
+
+      const collected: string[] = [];
+      let cursor: string | undefined;
+      let pages = 0;
+      let sawFinalPage = false;
+      while (pages < 10) {
+        const page = await listDirectoryEntries({ root, limit: 2, cursor });
+        pages += 1;
+        expect(page.entries.length).toBeLessThanOrEqual(2);
+        collected.push(...page.entries.map((entry) => entry.name));
+        if (page.hasMore) {
+          expect(page.nextCursor).toBeTruthy();
+          cursor = page.nextCursor ?? undefined;
+        } else {
+          expect(page.nextCursor ?? null).toBeNull();
+          sawFinalPage = true;
+          break;
+        }
+      }
+
+      expect(sawFinalPage).toBe(true);
+      expect(pages).toBe(3);
+      // Every entry is delivered exactly once across the pages.
+      expect([...collected].sort()).toEqual([...names].sort());
+      expect(new Set(collected).size).toBe(names.length);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("returns the full listing with no pagination fields when no limit is given", async () => {
+    const root = await createTempDir("paseo-file-explorer-full-");
+
+    try {
+      for (const name of ["one.txt", "two.txt", "three.txt"]) {
+        await writeFile(path.join(root, name), "x\n", "utf-8");
+      }
+
+      const result = await listDirectoryEntries({ root });
+
+      expect(result.entries).toHaveLength(3);
+      expect(result.nextCursor).toBeUndefined();
+      expect(result.hasMore).toBeUndefined();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("reads .ex files as text", async () => {
     const root = await createTempDir("paseo-file-explorer-");
 

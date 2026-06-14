@@ -339,6 +339,7 @@ export const zhCN: TranslationResources = {
       scriptsAccessibility: "Workspace scripts",
     },
     fileExplorer: {
+      loadMore: "加载更多",
       sort: {
         name: "名称",
         modified: "修改时间",

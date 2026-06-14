@@ -341,6 +341,7 @@ export const ru: TranslationResources = {
       scriptsAccessibility: "Скрипты Workspace",
     },
     fileExplorer: {
+      loadMore: "Загрузить ещё",
       sort: {
         name: "Имя",
         modified: "Модифицированный",
