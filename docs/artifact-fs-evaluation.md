@@ -153,14 +153,36 @@ Adopt the _philosophy_, not the _binary_. **A is already implemented** — Paseo
   - Client: `packages/app/src/components/file-explorer-pane.tsx:642-679`, `packages/app/src/stores/session-store.ts:234-244` (cache).
   - **Capability gating:** flag under `server_info.features.*` with `// COMPAT(fileExplorerRange): added in v0.1.X, drop the gate when floor >= v0.1.X`.
 
-## 9. Benchmark before building
+## 9. Benchmark — candidate B measured
 
-**No speedup percentages are claimed in this document on purpose** — there is no measured data, so any number would be fabricated. Measure first, on a large real repo:
+Candidate B's payoff is now measured by a dedicated opt-in harness,
+`packages/server/src/server/daemon-e2e/file-explorer-benchmark.local.e2e.test.ts`
+(`PASEO_FILE_EXPLORER_BENCH=1`, 240 s timeout, mirroring the git-diff-bottleneck pattern). It
+calls the production `service.ts` functions directly with the production constants
+(`DIRECTORY_PAGE_LIMIT=500`, `FILE_PREVIEW_HEAD_BYTES=512 KB`):
 
-1. **Worktree create breakdown** — setup already runs in the background (§4.1), so this measures _user-perceived_ readiness, not whether to build A. Time `git worktree add` (`worktree.ts:1191`) alone — the only blocking part — on a huge repo; if the checkout itself is slow, that (not setup) is the next target. Background setup duration only affects the "Setting up…" window, not worktree availability.
-2. **File-explorer latency** — frame size and time-to-first-render for a directory with thousands of entries (e.g. `node_modules`) and for a multi-MB file, **direct vs over relay** (the relay/mobile path is where chunking pays off). This sizes B.
+| Scenario                                | Whole                       | Candidate B                            | Reduction                                   |
+| --------------------------------------- | --------------------------- | -------------------------------------- | ------------------------------------------- |
+| **B-2** large directory (5,000 entries) | 557 KB JSON listing, 187 ms | first page 56 KB / 500 entries, 142 ms | **payload −89.9%**                          |
+| **B-1** large file (10 MB text)         | read 10 MB, 24 ms           | head slice 512 KB, 1 ms                | **bytes −95%**, whole-file `size` preserved |
 
-There is a reusable harness pattern: `packages/server/src/server/daemon-e2e/git-diff-bottleneck.local.e2e.test.ts` measures daemon git-subprocess fanout against the raw `git` CLI baseline and asserts the daemon stays within `10×` raw CLI time (`:89`). It is opt-in via `PASEO_GIT_DIFF_BOTTLENECK_E2E=1` (`:9`) and runs with a 240 s test timeout. Copy this structure — time the daemon operation, time the equivalent raw `git`, assert a multiple — for the worktree-create and explorer benchmarks above rather than inventing a new harness.
+These are **local, in-process payload/memory reductions**, not end-to-end latency. The relay/mobile
+path is where shipping 56 KB instead of 557 KB (or 512 KB instead of 10 MB) converts into faster
+time-to-first-render; that conversion still wants a real over-relay measurement. The payload
+reduction is the lever, and it is now quantified rather than assumed.
+
+Still unmeasured (out of candidate B's scope):
+
+1. **Worktree create breakdown** — setup already runs in the background (§4.1), so this would
+   measure _user-perceived_ readiness, not whether to build A. Time `git worktree add`
+   (`worktree.ts:1191`) alone on a huge repo; if the checkout itself is slow, that (not setup) is
+   the next target.
+2. **File-explorer over-relay latency** — the table above is direct/in-process; time-to-first-render
+   over the encrypted relay on a real mobile client is the remaining number.
+
+The harness mirrors `packages/server/src/server/daemon-e2e/git-diff-bottleneck.local.e2e.test.ts`
+(opt-in via env var, 240 s timeout, direct-call timing plus a relative-baseline assertion) rather
+than inventing a new pattern.
 
 ---
 
