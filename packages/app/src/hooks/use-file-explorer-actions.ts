@@ -7,6 +7,24 @@ import { explorerFileFromReadResult } from "@/file-explorer/read-result";
 // come back one page at a time; smaller directories fit in a single page (hasMore=false).
 const DIRECTORY_PAGE_LIMIT = 500;
 
+// B-3: when a directory is listed, speculatively prefetch its manifest/readme files so
+// opening one is instant. Scoped to manifests only (few per directory) so the explorer
+// cache stays bounded; reads just the head of each file.
+const PREFETCH_HEAD_BYTES = 64 * 1024;
+const MANIFEST_FILE_NAMES = new Set([
+  "package.json",
+  "readme.md",
+  "readme",
+  "readme.txt",
+  "cargo.toml",
+  "go.mod",
+  "pyproject.toml",
+  "requirements.txt",
+  "tsconfig.json",
+  "makefile",
+  "dockerfile",
+]);
+
 function createExplorerState(): AgentFileExplorerState {
   return {
     directories: new Map(),
@@ -88,6 +106,48 @@ export function useFileExplorerActions(params: { serverId: string } & FileExplor
     [serverId, setFileExplorer, workspaceStateKey],
   );
 
+  const prefetchManifestFiles = useCallback(
+    (entries: readonly { name: string; path: string; kind: string }[]) => {
+      if (!workspaceStateKey || !normalizedWorkspaceRoot || !client) {
+        return;
+      }
+      const cachedFiles = useSessionStore
+        .getState()
+        .sessions[serverId]?.fileExplorer.get(workspaceStateKey)?.files;
+      for (const entry of entries) {
+        if (entry.kind !== "file") {
+          continue;
+        }
+        if (!MANIFEST_FILE_NAMES.has(entry.name.toLowerCase())) {
+          continue;
+        }
+        if (cachedFiles?.has(entry.path)) {
+          continue;
+        }
+        void client
+          .readFile(normalizedWorkspaceRoot, entry.path, undefined, {
+            offset: 0,
+            length: PREFETCH_HEAD_BYTES,
+          })
+          .then((file) => {
+            const explorerFile = explorerFileFromReadResult(file);
+            return updateExplorerState((state) => {
+              if (state.files.has(explorerFile.path)) {
+                return state;
+              }
+              const files = new Map(state.files);
+              files.set(explorerFile.path, explorerFile);
+              return { ...state, files };
+            });
+          })
+          .catch(() => {
+            // Prefetch is best-effort; ignore failures.
+          });
+      }
+    },
+    [client, normalizedWorkspaceRoot, serverId, updateExplorerState, workspaceStateKey],
+  );
+
   const requestDirectoryListing = useCallback(
     async (
       path: string,
@@ -159,6 +219,8 @@ export function useFileExplorerActions(params: { serverId: string } & FileExplor
 
           return nextState;
         });
+        // B-3: prefetch manifest/readme files in this directory so opening them is instant.
+        prefetchManifestFiles(directory.entries);
         return true;
       } catch (error) {
         updateExplorerState((state) => ({
@@ -173,7 +235,14 @@ export function useFileExplorerActions(params: { serverId: string } & FileExplor
         return false;
       }
     },
-    [client, normalizedWorkspaceRoot, t, updateExplorerState, workspaceStateKey],
+    [
+      client,
+      normalizedWorkspaceRoot,
+      prefetchManifestFiles,
+      t,
+      updateExplorerState,
+      workspaceStateKey,
+    ],
   );
 
   const loadMoreDirectoryEntries = useCallback(
