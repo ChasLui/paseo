@@ -4620,7 +4620,11 @@ export class DaemonClient {
       return;
     }
 
-    const bytes = concatByteChunks(transfer.chunks, transfer.size);
+    // The transfer may be a byte range (B-1 fileRangeRead): `transfer.size` is the whole
+    // file size, but only the requested slice is actually sent. Size the buffer to the
+    // bytes received; the whole-file `size` below is kept for truncation detection.
+    const receivedBytes = transfer.chunks.reduce((total, chunk) => total + chunk.byteLength, 0);
+    const bytes = concatByteChunks(transfer.chunks, receivedBytes);
     this.activeBinaryFileTransfers.delete(frame.requestId);
     this.completedBinaryFileReads.set(frame.requestId, {
       bytes,

@@ -171,6 +171,15 @@ path is where shipping 56 KB instead of 557 KB (or 512 KB instead of 10 MB) conv
 time-to-first-render; that conversion still wants a real over-relay measurement. The payload
 reduction is the lever, and it is now quantified rather than assumed.
 
+An **end-to-end variant** in the same harness drives `ctx.client.listDirectory`/`readFile` across a
+real in-process daemon WebSocket (the full client→daemon→protocol→service path): first page 500 of
+5,001 entries; head read 512 KB with the whole-file `size` (10 MB) preserved. It also **caught a real
+B-1 bug** the pure-function tests could not — ranged reads travel as a binary frame, and the client
+sized the reassembly buffer from the whole-file `size` instead of the bytes actually received, so a
+512 KB head deserialized into a 10 MB buffer (truncation detection broken, content zero-padded).
+Fixed by sizing the buffer to the received chunk total (`daemon-client.ts` reassembler). This is the
+payoff of exercising the real transport, not only the pure functions.
+
 Still unmeasured (out of candidate B's scope):
 
 1. **Worktree create breakdown** — setup already runs in the background (§4.1), so this would
