@@ -6,6 +6,11 @@ export interface AgentMetadata {
   [key: string]: unknown;
 }
 
+export type AgentProviderNotice =
+  | { type: "info"; message: string }
+  | { type: "warning"; message: string }
+  | { type: "error"; message: string };
+
 /**
  * Stdio-based MCP server (spawns a subprocess).
  */
@@ -73,6 +78,7 @@ export interface AgentModelDefinition {
   description?: string;
   isDefault?: boolean;
   metadata?: AgentMetadata;
+  contextWindowMaxTokens?: number;
   thinkingOptions?: AgentSelectOption[];
   defaultThinkingOptionId?: string;
 }
