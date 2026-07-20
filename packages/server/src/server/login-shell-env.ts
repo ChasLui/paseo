@@ -23,9 +23,21 @@ interface LoginShellEnvDependencies {
   logger: LoginShellEnvLogger;
   now?: () => number;
   platform?: NodeJS.Platform;
+  /**
+   * Shell to resolve the login environment from, taking priority over both
+   * `env.SHELL` and the account's registered login shell. Callers that launch
+   * long-lived processes (like the daemon) use this to pin the user's login
+   * shell when the inherited `env.SHELL` reflects the launcher instead.
+   */
+  preferredShell?: string;
   spawnSync?: typeof defaultSpawnSync;
   userInfo?: typeof defaultUserInfo;
 }
+
+type ResolvedLoginShellEnvDependencies = Required<
+  Omit<LoginShellEnvDependencies, "preferredShell">
+> &
+  Pick<LoginShellEnvDependencies, "preferredShell">;
 
 function truncateForLog(value: string | undefined): string | undefined {
   if (!value) return undefined;
@@ -96,7 +108,7 @@ interface ThrowIfShellFailedInput {
 }
 
 interface ShellEnvForAttemptInput {
-  deps: Required<LoginShellEnvDependencies>;
+  deps: ResolvedLoginShellEnvDependencies;
   shellEnv: NodeJS.ProcessEnv;
   shell: string;
   command: string;
@@ -112,7 +124,7 @@ interface ShellAttemptErrorDetailsInput {
 }
 
 interface LogShellAttemptFailureInput {
-  deps: Required<LoginShellEnvDependencies>;
+  deps: ResolvedLoginShellEnvDependencies;
   error: unknown;
   details: ShellEnvErrorDetails;
   durationMs: number;
@@ -127,7 +139,7 @@ interface RestoreElectronEnvInput {
 }
 
 interface ResolveShellEnvInput {
-  deps: Required<LoginShellEnvDependencies>;
+  deps: ResolvedLoginShellEnvDependencies;
   timeoutMs: number;
 }
 
@@ -216,8 +228,10 @@ function throwIfShellFailed({ result, regex, shell, attempt }: ThrowIfShellFaile
 }
 
 function getSystemShell(
-  deps: Required<Pick<LoginShellEnvDependencies, "env" | "platform" | "userInfo">>,
+  deps: Pick<ResolvedLoginShellEnvDependencies, "env" | "platform" | "userInfo" | "preferredShell">,
 ): string {
+  if (deps.preferredShell) return deps.preferredShell;
+
   const shell = deps.env.SHELL;
   if (shell) return shell;
 
@@ -506,11 +520,12 @@ function resolveShellEnv({ deps, timeoutMs }: ResolveShellEnvInput): ResolvedShe
  * Approach borrowed from VS Code (src/vs/platform/shell/node/shellEnv.ts).
  */
 export function inheritLoginShellEnv(input: LoginShellEnvDependencies): void {
-  const deps: Required<LoginShellEnvDependencies> = {
+  const deps: ResolvedLoginShellEnvDependencies = {
     env: input.env ?? process.env,
     logger: input.logger,
     now: input.now ?? Date.now,
     platform: input.platform ?? process.platform,
+    preferredShell: input.preferredShell,
     spawnSync: input.spawnSync ?? defaultSpawnSync,
     userInfo: input.userInfo ?? defaultUserInfo,
   };

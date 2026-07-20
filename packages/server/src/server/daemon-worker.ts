@@ -93,13 +93,13 @@ function bootstrapFromEnvironment(): BootstrapResult {
     // terminal session. No-op on failure and on Windows.
     //
     // An inherited SHELL (e.g. launchd's default /bin/bash) reflects the
-    // launcher, not the user's login shell, so prefer the account's login
-    // shell when one is registered.
+    // launcher, not the user's login shell, so resolve against the account's
+    // registered login shell when one exists.
     const loginShell = userInfo().shell;
-    if (loginShell && loginShell !== "/bin/false") {
-      process.env.SHELL = loginShell;
-    }
-    inheritLoginShellEnv({ logger: createLoginShellEnvLogger(logger) });
+    inheritLoginShellEnv({
+      logger: createLoginShellEnvLogger(logger),
+      preferredShell: loginShell && loginShell !== "/bin/false" ? loginShell : undefined,
+    });
     return { paseoHome, logger, config };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

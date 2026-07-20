@@ -158,6 +158,40 @@ describe("login shell env retry behavior", () => {
     expect(logger.warnings).toEqual([]);
   });
 
+  it("resolves the login env from preferredShell instead of env.SHELL", () => {
+    const env = createEnv(fakeHome);
+    const logger = new RecordingLoginShellLogger();
+    const clock = createTestClock();
+    const calls: RecordedSpawn[] = [];
+    const fish = "/opt/homebrew/bin/fish";
+    const spawnSync: LoginShellSpawnSync = (shell, args, options) => {
+      const recordedArgs = Array.isArray(args) ? args.map(String) : [];
+      calls.push({
+        argv0: options?.argv0,
+        shell: String(shell),
+        args: recordedArgs,
+        timeoutMs: options?.timeout,
+      });
+      clock.advance(5);
+      return successResult(String(recordedArgs.at(-1)), { ...env, SHELL: fish });
+    };
+
+    inheritLoginShellEnv({
+      env,
+      logger,
+      now: clock.now,
+      platform: "darwin",
+      preferredShell: fish,
+      spawnSync,
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.shell).toBe(fish);
+    expect(env.SHELL).toBe(fish);
+    expect(logger.infos[0]?.fields).toMatchObject({ shell: fish });
+    expect(logger.warnings).toEqual([]);
+  });
+
   it("retries non-interactively after an interactive timeout", () => {
     const env = createEnv(fakeHome);
     const logger = new RecordingLoginShellLogger();
