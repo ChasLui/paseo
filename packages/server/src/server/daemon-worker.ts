@@ -95,7 +95,13 @@ function bootstrapFromEnvironment(): BootstrapResult {
     // An inherited SHELL (e.g. launchd's default /bin/bash) reflects the
     // launcher, not the user's login shell, so resolve against the account's
     // registered login shell when one exists.
-    const loginShell = userInfo().shell;
+    let loginShell: string | null = null;
+    try {
+      loginShell = userInfo().shell;
+    } catch {
+      // Not all systems have /etc/passwd entries for the current UID (e.g. Docker,
+      // minimal containers). Fall back to env.SHELL inside inheritLoginShellEnv.
+    }
     inheritLoginShellEnv({
       logger: createLoginShellEnvLogger(logger),
       preferredShell: loginShell && loginShell !== "/bin/false" ? loginShell : undefined,
